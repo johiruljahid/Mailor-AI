@@ -1,0 +1,175 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile in the Mailora AI platform",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique user ID" },
+        "email": { "type": "string", "format": "email", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Full name" },
+        "photoURL": { "type": "string", "description": "Profile picture URL" },
+        "businessId": { "type": "string", "description": "Reference to business ID" },
+        "role": { "type": "string", "enum": ["owner", "admin", "member"], "description": "User role" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["uid", "email", "businessId", "role"]
+    },
+    "Business": {
+      "title": "Business",
+      "description": "Workspace and business organization details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Business ID" },
+        "ownerUid": { "type": "string", "description": "User ID of owner" },
+        "name": { "type": "string", "description": "Business or company name" },
+        "industry": { "type": "string", "description": "Business vertical/type (e.g., E-commerce, Real Estate)" },
+        "website": { "type": "string", "description": "Company website" },
+        "timezone": { "type": "string", "description": "Preferred timezone" },
+        "supportEmail": { "type": "string", "format": "email", "description": "Main customer support address" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Created date" }
+      },
+      "required": ["id", "ownerUid", "name", "industry"]
+    },
+    "EmailAgent": {
+      "title": "EmailAgent",
+      "description": "Configuration of the AI Email Agent",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Agent ID" },
+        "businessId": { "type": "string", "description": "Associated business" },
+        "name": { "type": "string", "description": "Agent name, e.g. Mailora Assistant" },
+        "status": { "type": "string", "enum": ["ACTIVE", "PAUSED"], "description": "Agent operation status" },
+        "autoReplyEnabled": { "type": "boolean", "description": "Whether automated sending is enabled" },
+        "humanApprovalRequired": { "type": "boolean", "description": "Requires human review before sending" },
+        "replyLanguage": { "type": "string", "enum": ["English", "Bangla", "Bangla + English", "Multi-language (Auto-detect)"], "description": "Primary reply language" },
+        "tone": { "type": "string", "enum": ["Professional", "Friendly", "Formal", "Concise", "Empathetic"], "description": "Response tone" },
+        "instructions": { "type": "string", "description": "System directives for the agent" },
+        "emailSignature": { "type": "string", "description": "Standard signature attached to outgoing responses" },
+        "confidenceThreshold": { "type": "number", "description": "Minimum confidence required to auto-send" }
+      },
+      "required": ["id", "businessId", "name", "status", "autoReplyEnabled", "instructions"]
+    },
+    "KnowledgeItem": {
+      "title": "KnowledgeItem",
+      "description": "Business knowledge unit or document chunk",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Knowledge chunk ID" },
+        "businessId": { "type": "string", "description": "Owner business ID" },
+        "title": { "type": "string", "description": "Knowledge entry title or section heading" },
+        "category": { "type": "string", "enum": ["Company Information", "Products", "Services", "Pricing", "FAQ", "Refund Policy", "Shipping Policy", "Opening Hours", "Contact Information", "Custom"], "description": "Classification category" },
+        "content": { "type": "string", "description": "Full extracted text content or answer" },
+        "sourceDocumentId": { "type": "string", "description": "ID of parent uploaded file if applicable" },
+        "sourceFileName": { "type": "string", "description": "Original filename if uploaded" },
+        "status": { "type": "string", "enum": ["READY", "PROCESSING", "FAILED"], "description": "Index status" },
+        "isEnabled": { "type": "boolean", "description": "Whether active for AI retrieval" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last modified timestamp" }
+      },
+      "required": ["id", "businessId", "title", "content", "category", "isEnabled"]
+    },
+    "EmailThread": {
+      "title": "EmailThread",
+      "description": "Customer email thread and workflow status",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Thread ID" },
+        "businessId": { "type": "string", "description": "Owner business ID" },
+        "customerEmail": { "type": "string", "format": "email", "description": "Customer email address" },
+        "customerName": { "type": "string", "description": "Customer display name" },
+        "subject": { "type": "string", "description": "Email thread subject" },
+        "snippet": { "type": "string", "description": "Brief preview of latest message" },
+        "detectedIntent": { "type": "string", "description": "Classified intent e.g., Pricing, Support, Complaint" },
+        "status": { "type": "string", "enum": ["AUTO_REPLIED", "NEEDS_REVIEW", "ESCALATED", "FAILED", "RESOLVED"], "description": "Current resolution status" },
+        "confidenceScore": { "type": "number", "description": "AI intent / reply confidence score" },
+        "lastMessageAt": { "type": "string", "format": "date-time", "description": "Timestamp of most recent message" },
+        "unread": { "type": "boolean", "description": "Unread indicator" }
+      },
+      "required": ["id", "businessId", "customerEmail", "subject", "status"]
+    },
+    "EmailMessage": {
+      "title": "EmailMessage",
+      "description": "Individual message in a thread",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Message ID" },
+        "threadId": { "type": "string", "description": "Parent thread ID" },
+        "businessId": { "type": "string", "description": "Business ID" },
+        "sender": { "type": "string", "description": "Sender email and name" },
+        "recipient": { "type": "string", "description": "Recipient address" },
+        "direction": { "type": "string", "enum": ["INBOUND", "OUTBOUND_AI", "OUTBOUND_HUMAN"], "description": "Message flow direction" },
+        "body": { "type": "string", "description": "Message body content in plain text or html" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Time received or sent" },
+        "aiDraft": { "type": "string", "description": "Suggested AI response if in review" },
+        "reviewReason": { "type": "string", "description": "Reason flagged for human review" },
+        "matchedKnowledge": { "type": "string", "description": "JSON serialized knowledge references used" }
+      },
+      "required": ["id", "threadId", "businessId", "sender", "direction", "body", "createdAt"]
+    },
+    "AutomationRule": {
+      "title": "AutomationRule",
+      "description": "Workflow automation rule for incoming emails",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Rule ID" },
+        "businessId": { "type": "string", "description": "Business ID" },
+        "name": { "type": "string", "description": "Rule title" },
+        "trigger": { "type": "string", "description": "Event trigger (e.g. EMAIL_RECEIVED)" },
+        "conditionIntent": { "type": "string", "description": "Matched intent or ANY" },
+        "action": { "type": "string", "enum": ["AUTO_REPLY", "REVIEW_QUEUE", "ESCALATE_HUMAN", "IGNORE"], "description": "Execution action" },
+        "isActive": { "type": "boolean", "description": "Rule active status" }
+      },
+      "required": ["id", "businessId", "name", "trigger", "action", "isActive"]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "SaaS billing and quota tracking",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string", "description": "Business ID" },
+        "plan": { "type": "string", "enum": ["Free", "Starter", "Business", "Pro"], "description": "Subscribed tier" },
+        "status": { "type": "string", "enum": ["active", "trialing", "past_due", "canceled"], "description": "Subscription status" },
+        "emailsHandled": { "type": "number", "description": "Current month handled count" },
+        "emailQuota": { "type": "number", "description": "Max allowed emails per billing cycle" },
+        "storageBytesUsed": { "type": "number", "description": "Knowledge file storage in bytes" },
+        "storageQuotaBytes": { "type": "number", "description": "Max storage allowed in bytes" },
+        "renewalDate": { "type": "string", "format": "date-time", "description": "Next cycle date" }
+      },
+      "required": ["businessId", "plan", "status", "emailsHandled", "emailQuota"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document isolated per UID"
+    },
+    "/businesses/{businessId}": {
+      "schema": "Business",
+      "description": "Business workspace document owned by business owner"
+    },
+    "/businesses/{businessId}/agents/{agentId}": {
+      "schema": "EmailAgent",
+      "description": "Configured email agent for business"
+    },
+    "/businesses/{businessId}/knowledge/{knowledgeId}": {
+      "schema": "KnowledgeItem",
+      "description": "Knowledge base chunk items for RAG retrieval"
+    },
+    "/businesses/{businessId}/threads/{threadId}": {
+      "schema": "EmailThread",
+      "description": "Customer email conversations"
+    },
+    "/businesses/{businessId}/threads/{threadId}/messages/{messageId}": {
+      "schema": "EmailMessage",
+      "description": "Thread message history including AI drafts and notes"
+    },
+    "/businesses/{businessId}/rules/{ruleId}": {
+      "schema": "AutomationRule",
+      "description": "User defined automation logic"
+    },
+    "/businesses/{businessId}/subscription/current": {
+      "schema": "SubscriptionPlan",
+      "description": "Billing and usage metrics"
+    }
+  }
+}

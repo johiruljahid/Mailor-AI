@@ -1,0 +1,6 @@
+{
+  "name": "Mailora AI",
+  "description": "Your AI Employee for Email. Connect Gmail, train Mailora on your business knowledge, and let AI handle repetitive customer emails automatically.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
