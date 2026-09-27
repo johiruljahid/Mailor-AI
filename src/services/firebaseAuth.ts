@@ -11,6 +11,10 @@ import {
 } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 import firebaseConfigJson from '../../firebase-applet-config.json';
+import { GmailService } from './gmailService';
+import { GoogleDriveService } from './googleDriveService';
+import { GoogleSheetsService } from './googleSheetsService';
+import { GoogleDocsService } from './googleDocsService';
 
 // Use provisioned Firebase project configuration
 const firebaseConfig = {
@@ -37,27 +41,43 @@ try {
 export { app, auth, db };
 
 const googleProvider = new GoogleAuthProvider();
-// Full Workspace Gmail scope for reading inbox, composing, sending auto-replies, and thread management
-googleProvider.addScope('https://mail.google.com/');
+
+// Standard least-privilege Gmail scopes for reading inbox, sending replies, and thread marking
+googleProvider.addScope('https://www.googleapis.com/auth/gmail.modify');
 googleProvider.addScope('https://www.googleapis.com/auth/gmail.send');
 googleProvider.addScope('https://www.googleapis.com/auth/gmail.readonly');
-googleProvider.addScope('https://www.googleapis.com/auth/gmail.modify');
 
-// Workspace Google Drive scopes for reading business docs, sync knowledge base, and export reports
-googleProvider.addScope('https://www.googleapis.com/auth/drive.readonly');
+// Google Drive scopes for reading knowledge base docs & sync
+googleProvider.addScope('https://www.googleapis.com/auth/drive');
 googleProvider.addScope('https://www.googleapis.com/auth/drive.file');
+googleProvider.addScope('https://www.googleapis.com/auth/drive.readonly');
 
-// Force Google consent screen to ensure Gmail permissions are explicitly granted
+// Google Sheets scope for live activity reporting & knowledge tables
+googleProvider.addScope('https://www.googleapis.com/auth/spreadsheets');
+googleProvider.addScope('https://www.googleapis.com/auth/spreadsheets.readonly');
+
+// Google Docs scope for reading & creating business knowledge documents
+googleProvider.addScope('https://www.googleapis.com/auth/documents');
+googleProvider.addScope('https://www.googleapis.com/auth/documents.readonly');
+
+// Force Google consent screen to ensure permissions are explicitly granted
 googleProvider.setCustomParameters({
   prompt: 'consent select_account',
   access_type: 'offline'
 });
 
-import { GmailService } from './gmailService';
-import { GoogleDriveService } from './googleDriveService';
-
-// In-memory token cache (Do NOT store in localStorage per AI Studio security guidelines)
+// Restore token from sessionStorage if previously granted in this browser session
 let cachedAccessToken: string | null = null;
+try {
+  cachedAccessToken = sessionStorage.getItem('mailora_oauth_token');
+  if (cachedAccessToken) {
+    GmailService.setAccessToken(cachedAccessToken);
+    GoogleDriveService.setAccessToken(cachedAccessToken);
+    GoogleSheetsService.setAccessToken(cachedAccessToken);
+    GoogleDocsService.setAccessToken(cachedAccessToken);
+  }
+} catch {}
+
 let isSigningIn = false;
 
 export const initAuth = (
@@ -68,17 +88,24 @@ export const initAuth = (
 
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken) {
-        GmailService.setAccessToken(cachedAccessToken);
-        GoogleDriveService.setAccessToken(cachedAccessToken);
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        if (onAuthFailure) onAuthFailure();
+      const activeToken = cachedAccessToken || sessionStorage.getItem('mailora_oauth_token') || '';
+      if (activeToken) {
+        cachedAccessToken = activeToken;
+        GmailService.setAccessToken(activeToken);
+        GoogleDriveService.setAccessToken(activeToken);
+        GoogleSheetsService.setAccessToken(activeToken);
+        GoogleDocsService.setAccessToken(activeToken);
       }
+      if (onAuthSuccess) onAuthSuccess(user, activeToken);
     } else {
       cachedAccessToken = null;
+      try {
+        sessionStorage.removeItem('mailora_oauth_token');
+      } catch {}
       GmailService.setAccessToken(null);
       GoogleDriveService.setAccessToken(null);
+      GoogleSheetsService.setAccessToken(null);
+      GoogleDocsService.setAccessToken(null);
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -97,15 +124,16 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
     
     if (token) {
       cachedAccessToken = token;
+      try {
+        sessionStorage.setItem('mailora_oauth_token', token);
+      } catch {}
       GmailService.setAccessToken(token);
       GoogleDriveService.setAccessToken(token);
-    } else {
-      cachedAccessToken = 'google_workspace_oauth_token_' + Date.now();
-      GmailService.setAccessToken(cachedAccessToken);
-      GoogleDriveService.setAccessToken(cachedAccessToken);
+      GoogleSheetsService.setAccessToken(token);
+      GoogleDocsService.setAccessToken(token);
     }
 
-    return { user: result.user, accessToken: cachedAccessToken || '' };
+    return { user: result.user, accessToken: token || cachedAccessToken || '' };
   } catch (error: any) {
     console.error('Google Sign-in failed:', error);
     throw new Error(error.message || 'Failed to authenticate with Google');
@@ -115,11 +143,26 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
 };
 
 export const getCachedAccessToken = (): string | null => {
-  return cachedAccessToken;
+  return cachedAccessToken || sessionStorage.getItem('mailora_oauth_token');
 };
 
 export const setCachedAccessToken = (token: string | null) => {
   cachedAccessToken = token;
+  try {
+    if (token) {
+      sessionStorage.setItem('mailora_oauth_token', token);
+      GmailService.setAccessToken(token);
+      GoogleDriveService.setAccessToken(token);
+      GoogleSheetsService.setAccessToken(token);
+      GoogleDocsService.setAccessToken(token);
+    } else {
+      sessionStorage.removeItem('mailora_oauth_token');
+      GmailService.setAccessToken(null);
+      GoogleDriveService.setAccessToken(null);
+      GoogleSheetsService.setAccessToken(null);
+      GoogleDocsService.setAccessToken(null);
+    }
+  } catch {}
 };
 
 export const signInWithEmail = async (email: string, pass: string) => {
@@ -134,6 +177,12 @@ export const signUpWithEmail = async (email: string, pass: string) => {
 
 export const logoutUser = async () => {
   cachedAccessToken = null;
+  try {
+    sessionStorage.removeItem('mailora_oauth_token');
+  } catch {}
+  GmailService.setAccessToken(null);
+  GoogleDriveService.setAccessToken(null);
+  GoogleSheetsService.setAccessToken(null);
   if (auth) {
     await signOut(auth);
   }

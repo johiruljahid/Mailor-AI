@@ -146,4 +146,66 @@ export class FirestoreSyncService {
       return null;
     }
   }
+
+  /**
+   * Save Google Sheets reporting config
+   */
+  static async saveSheetsConfig(businessId: string, config: any): Promise<boolean> {
+    if (!db) return false;
+    try {
+      const ref = doc(db, 'businesses', businessId, 'sheets', 'default_report');
+      await setDoc(ref, config, { merge: true });
+      return true;
+    } catch (err) {
+      console.warn('Firestore saveSheetsConfig notice:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Fetch Google Sheets reporting config
+   */
+  static async fetchSheetsConfig(businessId: string): Promise<any | null> {
+    if (!db) return null;
+    try {
+      const ref = doc(db, 'businesses', businessId, 'sheets', 'default_report');
+      const snapshot = await getDoc(ref);
+      if (!snapshot.exists()) return null;
+      return snapshot.data();
+    } catch (err) {
+      console.warn('Firestore fetchSheetsConfig notice:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Save auto reply activity logs
+   */
+  static async saveAutoReplyLogs(businessId: string, logs: any[]): Promise<boolean> {
+    if (!db) return false;
+    try {
+      const ref = doc(db, 'businesses', businessId, 'logs', 'activity_logs');
+      await setDoc(ref, { logs: logs.slice(0, 100), updatedAt: new Date().toISOString() }, { merge: true });
+      return true;
+    } catch (err) {
+      console.warn('Firestore saveAutoReplyLogs notice:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Fetch auto reply activity logs
+   */
+  static async fetchAutoReplyLogs(businessId: string): Promise<any[] | null> {
+    if (!db) return null;
+    try {
+      const ref = doc(db, 'businesses', businessId, 'logs', 'activity_logs');
+      const snapshot = await getDoc(ref);
+      if (!snapshot.exists()) return null;
+      return snapshot.data()?.logs || null;
+    } catch (err) {
+      console.warn('Firestore fetchAutoReplyLogs notice:', err);
+      return null;
+    }
+  }
 }

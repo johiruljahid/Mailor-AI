@@ -19,6 +19,7 @@ export interface Business {
   timezone: string;
   supportEmail?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export type AgentStatus = 'ACTIVE' | 'PAUSED';
@@ -109,7 +110,7 @@ export type EmailIntent =
   | 'Spam'
   | 'Other';
 
-export type ThreadStatus = 'AUTO_REPLIED' | 'NEEDS_REVIEW' | 'ESCALATED' | 'FAILED' | 'RESOLVED';
+export type ThreadStatus = 'AUTO_REPLIED' | 'NEEDS_REVIEW' | 'ESCALATED' | 'FAILED' | 'RESOLVED' | 'REJECTED' | 'IGNORED';
 
 export interface EmailThread {
   id: string;
@@ -225,3 +226,15 @@ export interface ToastNotification {
   title: string;
   message?: string;
 }
+
+export interface GoogleSheetsConfig {
+  isConnected: boolean;
+  spreadsheetId?: string;
+  spreadsheetUrl?: string;
+  spreadsheetTitle?: string;
+  sheetName?: string;
+  totalRowsLogged: number;
+  lastSyncedAt?: string;
+  autoSyncEnabled: boolean;
+}
+

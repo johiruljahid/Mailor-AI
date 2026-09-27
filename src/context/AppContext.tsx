@@ -12,10 +12,10 @@ import {
   ToastNotification,
   EmailIntent,
   KnowledgeCategory,
-  GoogleDriveFile,
   AutoReplyLog,
   AgentTone,
   ReplyLanguage,
+  GoogleSheetsConfig,
 } from '../types';
 import {
   INITIAL_USER,
@@ -33,9 +33,11 @@ import { retrieveRelevantKnowledge } from '../lib/knowledgeRetrieval';
 import { classifyEmailIntent, generateAgentEmailReply } from '../lib/gemini';
 import { GmailService } from '../services/gmailService';
 import { GoogleDriveService } from '../services/googleDriveService';
+import { GoogleSheetsService } from '../services/googleSheetsService';
+import { GoogleDocsService } from '../services/googleDocsService';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { WebsiteCrawlerService, ExtractedWebsiteData } from '../services/websiteCrawlerService';
-import { setCachedAccessToken, initAuth, logoutUser, signInWithGoogle } from '../services/firebaseAuth';
+import { setCachedAccessToken, getCachedAccessToken, initAuth, logoutUser, signInWithGoogle } from '../services/firebaseAuth';
 
 export type AppView =
   | 'landing'
@@ -77,6 +79,15 @@ interface AppContextType {
   pollAndAutoReplyGmail: () => Promise<{ processed: number }>;
   isGoogleAuthenticated: boolean;
   connectGoogleAccount: () => Promise<void>;
+
+  // Google Sheets Activity Report
+  googleSheetsConfig: GoogleSheetsConfig;
+  connectGoogleSheet: (spreadsheetIdOrUrl?: string) => Promise<{ success: boolean; spreadsheetUrl: string }>;
+  disconnectGoogleSheet: () => void;
+  exportActivityToCsv: () => void;
+
+  // Google Drive Integration
+  connectGoogleDrive: () => Promise<boolean>;
 
   // Data models
   user: UserProfile | null;
@@ -131,6 +142,25 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+// Helper for user-isolated local caching to guarantee persistence across logouts/logins
+const getUserStorageKey = (uid: string) => `mailora_user_data_${uid}`;
+
+const saveUserLocalData = (uid: string, data: any) => {
+  try {
+    const existing = JSON.parse(localStorage.getItem(getUserStorageKey(uid)) || '{}');
+    localStorage.setItem(getUserStorageKey(uid), JSON.stringify({ ...existing, ...data }));
+  } catch {}
+};
+
+const loadUserLocalData = (uid: string) => {
+  try {
+    const raw = localStorage.getItem(getUserStorageKey(uid));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentView, setCurrentView] = useState<AppView>('landing');
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
@@ -141,7 +171,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isGoogleConnectModalOpen, setIsGoogleConnectModalOpen] = useState(false);
   const [isSyncingGmail, setIsSyncingGmail] = useState(false);
 
-  // Background Auto-Responder Engine
+  // Background Auto-Responder Engine State
   const [isAutoResponderActive, setIsAutoResponderActiveState] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('mailora_auto_responder_active');
@@ -157,12 +187,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem('mailora_auto_responder_active', String(active));
     } catch {}
   };
+
   const [autoScanCountdown, setAutoScanCountdown] = useState(10);
   const handledMessageIdsRef = useRef<Set<string>>(new Set());
   const [isGoogleAuthenticated, setIsGoogleAuthenticated] = useState<boolean>(() => {
-    const token = GmailService.getAccessToken();
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
     return Boolean(token && !token.startsWith('demo_'));
   });
+
   const [autoReplyLogs, setAutoReplyLogs] = useState<AutoReplyLog[]>([
     {
       id: 'log_init_1',
@@ -171,18 +203,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fromName: 'Sarah Connor',
       subject: 'Question regarding custom web development timeline and initial deposit',
       incomingSnippet: 'We are reviewing your Starter vs Growth web packages...',
-      replySnippet: 'Hi Sarah, Thank you for reaching out! Our Starter package includes full responsive design and turnaround is typically 7 business days...',
-      fullReply: 'Hi Sarah,\n\nThank you for reaching out! Our Starter package includes full responsive design and turnaround is typically 7 business days. Our 14-day guarantee applies across all plans.\n\nBest regards,\nCustomer Support Team',
+      replySnippet: 'Hi Sarah, Thank you for reaching out! Our Starter package turnaround is typically 7 business days...',
+      fullReply: 'Hi Sarah,\n\nThank you for reaching out! Our Starter package turnaround is typically 7 business days. Our 14-day guarantee applies across all plans.\n\nBest regards,\nCustomer Support Team',
       intent: 'Pricing',
       timestamp: '10m ago',
       status: 'DELIVERED',
-    }
+    },
   ]);
+
+  // Google Sheets Activity Report Config
+  const [googleSheetsConfig, setGoogleSheetsConfig] = useState<GoogleSheetsConfig>({
+    isConnected: false,
+    totalRowsLogged: 0,
+    autoSyncEnabled: true,
+  });
 
   // Core state loaded with realistic defaults
   const [user, setUser] = useState<UserProfile | null>(INITIAL_USER);
   const [business, setBusiness] = useState<Business>(INITIAL_BUSINESS);
-  // Default to 100% Autopilot (no approval needed)
   const [agent, setAgent] = useState<EmailAgentConfig>({
     ...INITIAL_AGENT,
     autoReplyEnabled: true,
@@ -203,11 +241,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.modify',
       'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/spreadsheets',
     ],
   });
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
-  // Listen to Firebase Auth state on mount
+  // Listen to Firebase Auth state on mount & restore user data
   useEffect(() => {
     const unsubscribe = initAuth(
       (authUser, token) => {
@@ -223,16 +263,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           createdAt: new Date().toISOString(),
         };
         setUser(profile);
-        setBusiness(prev => ({
-          ...prev,
-          id: userBizId,
-          ownerUid: authUser.uid,
-          supportEmail: authenticEmail,
-        }));
-        setCachedAccessToken(token);
-        GmailService.setAccessToken(token);
-        GoogleDriveService.setAccessToken(token);
-        setIsGoogleAuthenticated(Boolean(token && !token.startsWith('demo_')));
+
+        if (token) {
+          setCachedAccessToken(token);
+          GmailService.setAccessToken(token);
+          GoogleDriveService.setAccessToken(token);
+          GoogleSheetsService.setAccessToken(token);
+          setIsGoogleAuthenticated(!token.startsWith('demo_'));
+        }
+
         setGmailAccount(prev => ({
           ...prev,
           email: authenticEmail,
@@ -242,17 +281,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isAuthenticOAuth: true,
           lastVerifiedAt: new Date().toISOString(),
         }));
+
+        // 1. Immediately restore user-isolated local state (instant restore upon login)
+        const localData = loadUserLocalData(authUser.uid);
+        if (localData) {
+          if (localData.business) setBusiness(localData.business);
+          if (localData.agent) setAgent(localData.agent);
+          if (localData.knowledge && localData.knowledge.length > 0) setKnowledge(localData.knowledge);
+          if (localData.autoReplyLogs && localData.autoReplyLogs.length > 0) setAutoReplyLogs(localData.autoReplyLogs);
+          if (localData.googleSheetsConfig) setGoogleSheetsConfig(localData.googleSheetsConfig);
+        }
+
+        // 2. Ensure business workspace exists in Firestore with ownerUid
+        const initialBizRecord: Business = {
+          ...(localData?.business || INITIAL_BUSINESS),
+          id: userBizId,
+          ownerUid: authUser.uid,
+          supportEmail: authenticEmail,
+          updatedAt: new Date().toISOString(),
+        };
+        FirestoreSyncService.saveBusiness(initialBizRecord);
         FirestoreSyncService.saveUserProfile(profile);
 
-        // Fetch user-isolated business profile, agent rules, and knowledge base
+        // 3. Fetch user-isolated business profile, agent rules, and knowledge base from Firestore
         FirestoreSyncService.fetchBusiness(userBizId).then(savedBiz => {
-          if (savedBiz) setBusiness(savedBiz);
+          if (savedBiz) {
+            setBusiness(savedBiz);
+            saveUserLocalData(authUser.uid, { business: savedBiz });
+          }
         });
         FirestoreSyncService.fetchAgentConfig(userBizId).then(savedAgent => {
-          if (savedAgent) setAgent(savedAgent);
+          if (savedAgent) {
+            setAgent(savedAgent);
+            saveUserLocalData(authUser.uid, { agent: savedAgent });
+          }
         });
         FirestoreSyncService.fetchKnowledge(userBizId).then(savedKnowledge => {
-          if (savedKnowledge && savedKnowledge.length > 0) setKnowledge(savedKnowledge);
+          if (savedKnowledge && savedKnowledge.length > 0) {
+            setKnowledge(savedKnowledge);
+            saveUserLocalData(authUser.uid, { knowledge: savedKnowledge });
+          }
+        });
+        FirestoreSyncService.fetchSheetsConfig(userBizId).then(savedSheets => {
+          if (savedSheets) {
+            setGoogleSheetsConfig(savedSheets);
+            saveUserLocalData(authUser.uid, { googleSheetsConfig: savedSheets });
+          }
+        });
+        FirestoreSyncService.fetchAutoReplyLogs(userBizId).then(savedLogs => {
+          if (savedLogs && savedLogs.length > 0) {
+            setAutoReplyLogs(savedLogs);
+            saveUserLocalData(authUser.uid, { autoReplyLogs: savedLogs });
+          }
         });
       },
       () => {
@@ -280,6 +360,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCachedAccessToken(token);
       GmailService.setAccessToken(token);
       GoogleDriveService.setAccessToken(token);
+      GoogleSheetsService.setAccessToken(token);
       setIsGoogleAuthenticated(true);
     }
     setGmailAccount(prev => ({
@@ -292,6 +373,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       lastVerifiedAt: new Date().toISOString(),
     }));
     FirestoreSyncService.saveUserProfile(profile);
+    if (profile.uid) {
+      saveUserLocalData(profile.uid, { profile });
+    }
   };
 
   const connectGoogleAccount = async () => {
@@ -300,23 +384,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (res?.user && res.accessToken) {
         setIsGoogleAuthenticated(true);
         const authenticEmail = res.user.email || 'johirul4856@gmail.com';
-        setUserProfile(
-          {
-            uid: res.user.uid,
-            email: authenticEmail,
-            displayName: res.user.displayName || authenticEmail.split('@')[0],
-            photoURL: res.user.photoURL || undefined,
-            businessId: business.id,
-            role: 'owner',
-            createdAt: new Date().toISOString(),
-          },
-          res.accessToken
-        );
+        const userBizId = `biz_${res.user.uid}`;
+        const newProfile: UserProfile = {
+          uid: res.user.uid,
+          email: authenticEmail,
+          displayName: res.user.displayName || authenticEmail.split('@')[0],
+          photoURL: res.user.photoURL || undefined,
+          businessId: userBizId,
+          role: 'owner',
+          createdAt: new Date().toISOString(),
+        };
+
+        setUserProfile(newProfile, res.accessToken);
+
+        // Ensure business record is persisted in Firestore
+        const userBiz: Business = {
+          ...business,
+          id: userBizId,
+          ownerUid: res.user.uid,
+          supportEmail: authenticEmail,
+          updatedAt: new Date().toISOString(),
+        };
+        setBusiness(userBiz);
+        FirestoreSyncService.saveBusiness(userBiz);
+        saveUserLocalData(res.user.uid, { business: userBiz });
+
         addToast({
           type: 'success',
-          title: 'Gmail Access Granted ✓',
-          message: `Connected ${authenticEmail}. Background Autoresponder is now active!`,
+          title: 'Google Workspace Connected ✓',
+          message: `Connected ${authenticEmail}. Gmail auto-replies, Google Drive & Sheets are now active!`,
         });
+
         setTimeout(() => {
           pollAndAutoReplyGmail();
         }, 800);
@@ -328,6 +426,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         message: err.message || 'Could not connect Google account.',
       });
     }
+  };
+
+  const connectGoogleDrive = async (): Promise<boolean> => {
+    try {
+      const token = GmailService.getAccessToken() || getCachedAccessToken();
+      if (!token) {
+        await connectGoogleAccount();
+      }
+      setIsDriveModalOpen(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Connect Google Sheets for Live Email Activity Reports
+  const connectGoogleSheet = async (spreadsheetIdOrUrl?: string): Promise<{ success: boolean; spreadsheetUrl: string }> => {
+    try {
+      let sheetId = '';
+      let sheetUrl = '';
+
+      if (spreadsheetIdOrUrl && spreadsheetIdOrUrl.trim().length > 0) {
+        const input = spreadsheetIdOrUrl.trim();
+        const match = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+        sheetId = match ? match[1] : input;
+        sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+      } else {
+        const created = await GoogleSheetsService.createReportSpreadsheet(
+          `${business.name || 'Mailora AI'} - Email Activity & Client Report`
+        );
+        sheetId = created.spreadsheetId;
+        sheetUrl = created.spreadsheetUrl;
+      }
+
+      const updatedConfig: GoogleSheetsConfig = {
+        isConnected: true,
+        spreadsheetId: sheetId,
+        spreadsheetUrl: sheetUrl,
+        spreadsheetTitle: `${business.name || 'Mailora AI'} - Email Activity Report`,
+        sheetName: 'Email Activity Log',
+        totalRowsLogged: autoReplyLogs.length,
+        lastSyncedAt: new Date().toISOString(),
+        autoSyncEnabled: true,
+      };
+
+      setGoogleSheetsConfig(updatedConfig);
+
+      if (user?.uid) {
+        saveUserLocalData(user.uid, { googleSheetsConfig: updatedConfig });
+        FirestoreSyncService.saveSheetsConfig(`biz_${user.uid}`, updatedConfig);
+      }
+
+      addToast({
+        type: 'success',
+        title: 'Google Sheet Connected ✓',
+        message: 'Live email activity will automatically log into your connected spreadsheet.',
+      });
+
+      return { success: true, spreadsheetUrl: sheetUrl };
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Sheet Connection Error',
+        message: err.message || 'Could not link Google Sheet.',
+      });
+      return { success: false, spreadsheetUrl: '' };
+    }
+  };
+
+  const disconnectGoogleSheet = () => {
+    const cleared: GoogleSheetsConfig = {
+      isConnected: false,
+      totalRowsLogged: 0,
+      autoSyncEnabled: false,
+    };
+    setGoogleSheetsConfig(cleared);
+    if (user?.uid) {
+      saveUserLocalData(user.uid, { googleSheetsConfig: cleared });
+      FirestoreSyncService.saveSheetsConfig(`biz_${user.uid}`, cleared);
+    }
+    addToast({
+      type: 'info',
+      title: 'Google Sheet Disconnected',
+      message: 'Automatic logging to Google Sheets paused.',
+    });
+  };
+
+  const exportActivityToCsv = () => {
+    GoogleSheetsService.exportToCsv(
+      autoReplyLogs,
+      `${business.name.replace(/[^a-zA-Z0-9]/g, '_')}_Email_Report_${new Date().toISOString().slice(0, 10)}.csv`
+    );
+    addToast({
+      type: 'success',
+      title: 'Report Downloaded ✓',
+      message: 'Downloaded client email activity as Excel/CSV.',
+    });
   };
 
   const loginAsDemoUser = () => {
@@ -348,11 +543,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCachedAccessToken(null);
     GmailService.setAccessToken(null);
     GoogleDriveService.setAccessToken(null);
+    GoogleSheetsService.setAccessToken(null);
     setIsGoogleAuthenticated(false);
+
+    // Reset runtime states to defaults, but keep saved user data in storage/firestore!
+    setBusiness(INITIAL_BUSINESS);
+    setAgent(INITIAL_AGENT);
+    setKnowledge(INITIAL_KNOWLEDGE);
+    setAutoReplyLogs([]);
+    setGoogleSheetsConfig({
+      isConnected: false,
+      totalRowsLogged: 0,
+      autoSyncEnabled: true,
+    });
+
     addToast({
       type: 'info',
-      title: 'Logged out',
-      message: 'You have been securely signed out.',
+      title: 'Logged out securely',
+      message: 'Your business profile, knowledge, and settings are saved under your Google account.',
     });
   };
 
@@ -360,6 +568,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAgent(prev => {
       const updated = { ...prev, ...updates, updatedAt: new Date().toISOString() };
       FirestoreSyncService.saveAgentConfig(business.id, updated);
+      if (user?.uid) {
+        saveUserLocalData(user.uid, { agent: updated });
+      }
       return updated;
     });
     addToast({
@@ -372,12 +583,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addKnowledgeItem = (item: Omit<KnowledgeItem, 'id' | 'businessId' | 'createdAt' | 'updatedAt'>) => {
     const newItem: KnowledgeItem = {
       ...item,
-      id: `kb_${Date.now()}`,
+      id: `kb_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
       businessId: business.id,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    setKnowledge(prev => [newItem, ...prev]);
+    setKnowledge(prev => {
+      const next = [newItem, ...prev];
+      if (user?.uid) {
+        saveUserLocalData(user.uid, { knowledge: next });
+      }
+      return next;
+    });
     FirestoreSyncService.saveKnowledgeItem(business.id, newItem);
 
     setSubscription(prev => ({
@@ -386,22 +603,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
     addToast({
       type: 'success',
-      title: 'Knowledge indexed',
+      title: 'Knowledge indexed ✓',
       message: `"${item.title}" is now active for AI email answers.`,
     });
   };
 
   const updateKnowledgeItem = (id: string, updates: Partial<KnowledgeItem>) => {
-    setKnowledge(prev =>
-      prev.map(k => {
+    setKnowledge(prev => {
+      const next = prev.map(k => {
         if (k.id === id) {
           const updated = { ...k, ...updates, updatedAt: new Date().toISOString() };
           FirestoreSyncService.saveKnowledgeItem(business.id, updated);
           return updated;
         }
         return k;
-      })
-    );
+      });
+      if (user?.uid) {
+        saveUserLocalData(user.uid, { knowledge: next });
+      }
+      return next;
+    });
     addToast({
       type: 'info',
       title: 'Knowledge updated',
@@ -410,7 +631,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteKnowledgeItem = (id: string) => {
     const item = knowledge.find(k => k.id === id);
-    setKnowledge(prev => prev.filter(k => k.id !== id));
+    setKnowledge(prev => {
+      const next = prev.filter(k => k.id !== id);
+      if (user?.uid) {
+        saveUserLocalData(user.uid, { knowledge: next });
+      }
+      return next;
+    });
     FirestoreSyncService.deleteKnowledgeItem(business.id, id);
     addToast({
       type: 'info',
@@ -420,19 +647,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleKnowledgeItem = (id: string) => {
-    setKnowledge(prev =>
-      prev.map(k => {
+    setKnowledge(prev => {
+      const next = prev.map(k => {
         if (k.id === id) {
           const updated = { ...k, isEnabled: !k.isEnabled };
           FirestoreSyncService.saveKnowledgeItem(business.id, updated);
           return updated;
         }
         return k;
-      })
-    );
+      });
+      if (user?.uid) {
+        saveUserLocalData(user.uid, { knowledge: next });
+      }
+      return next;
+    });
   };
 
-  // Direct Outbound Execution / Manual Reply if needed
   const approveAndSendEmail = async (threadId: string, customReply?: string): Promise<boolean> => {
     const thread = threads.find(t => t.id === threadId);
     if (!thread) return false;
@@ -451,12 +681,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
+      const token = GmailService.getAccessToken() || getCachedAccessToken();
       await GmailService.sendEmail({
         to: thread.customerEmail,
         subject: thread.subject.startsWith('Re: ') ? thread.subject : `Re: ${thread.subject}`,
         body: bodyToSend,
         threadId: thread.id,
-      });
+        senderName: agent.name,
+        businessName: business.name,
+      }, token || undefined);
 
       const outboundMsg: EmailMessage = {
         id: `msg_sent_${Date.now()}`,
@@ -498,15 +731,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addToast({
         type: 'success',
         title: 'AI Reply Dispatched ✓',
-        message: `Response successfully delivered to ${thread.customerEmail} via Gmail.`,
+        message: `Email successfully sent to ${thread.customerEmail}`,
       });
 
       return true;
     } catch (err: any) {
       addToast({
         type: 'error',
-        title: 'Failed to send reply',
-        message: err.message || 'Please check Gmail connection.',
+        title: 'Failed to send email',
+        message: err.message || 'Gmail API error occurred.',
       });
       return false;
     }
@@ -514,27 +747,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const rejectEmail = (threadId: string) => {
     setThreads(prev =>
-      prev.map(t => (t.id === threadId ? { ...t, status: 'RESOLVED', unread: false } : t))
+      prev.map(t => (t.id === threadId ? { ...t, status: 'REJECTED', unread: false } : t))
     );
     addToast({
       type: 'info',
       title: 'Email dismissed',
-      message: 'Marked as dismissed and removed from attention queue.',
     });
   };
 
   const escalateEmail = (threadId: string, reason?: string) => {
     setThreads(prev =>
-      prev.map(t =>
-        t.id === threadId
-          ? { ...t, status: 'ESCALATED', unread: false, aiReviewReason: reason || 'Escalated to human supervisor' }
-          : t
-      )
+      prev.map(t => (t.id === threadId ? { ...t, status: 'ESCALATED', unread: false } : t))
     );
     addToast({
       type: 'warning',
-      title: 'Escalated to Team',
-      message: 'Email assigned to senior team member inbox.',
+      title: 'Thread Escalated',
+      message: reason || 'Assigned to human team lead.',
     });
   };
 
@@ -552,234 +780,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
     setAutomations(prev => [newRule, ...prev]);
-    addToast({
-      type: 'success',
-      title: 'Automation created',
-      message: `Rule "${rule.name}" is now active.`,
-    });
   };
 
-  const connectGmail = (emailAddress?: string) => {
-    const email = emailAddress || user?.email || 'johirul4856@gmail.com';
-    setGmailAccount({
-      email,
-      name: `${business.name} Support`,
-      status: 'connected',
-      connectedAt: new Date().toISOString(),
-      dailySentCount: 0,
-      dailyQuota: 500,
-      isDemo: false,
-      isAuthenticOAuth: true,
-    });
-    addToast({
-      type: 'success',
-      title: 'Gmail connected ✓',
-      message: `Connected ${email} to Mailora AI in 100% Autopilot mode.`,
-    });
+  const connectGmail = (email?: string) => {
+    connectGoogleAccount();
   };
 
   const disconnectGmail = () => {
     setGmailAccount(prev => ({
       ...prev,
       status: 'disconnected',
+      isAuthenticOAuth: false,
     }));
+    setIsGoogleAuthenticated(false);
+    setCachedAccessToken(null);
     addToast({
       type: 'info',
-      title: 'Gmail disconnected',
-      message: 'Mailora AI will no longer listen or reply to emails.',
+      title: 'Gmail Disconnected',
+      message: 'Background autoresponder is paused.',
     });
   };
 
-  // Sync recent emails from connected Gmail Inbox and AUTO-REPLY immediately
   const syncGmailInbox = async (): Promise<{ processedCount: number; autoRepliedCount: number }> => {
     setIsSyncingGmail(true);
-    addToast({
-      type: 'info',
-      title: 'Scanning Gmail Inbox',
-      message: 'Checking for unread customer inquiries...',
-    });
-
     try {
-      const incomingEmails = await GmailService.fetchRecentEmails(3);
-      let processed = 0;
-      let autoReplied = 0;
-
-      for (const item of incomingEmails) {
-        if (
-          threads.some(
-            t => t.id === item.threadId || (t.customerEmail === item.from && t.subject === item.subject)
-          )
-        ) {
-          continue;
-        }
-
-        // 1. Classification
-        const classification = await classifyEmailIntent(item.subject, item.body);
-
-        // 2. Knowledge Retrieval (RAG)
-        const retrievedChunks = retrieveRelevantKnowledge(
-          `${item.subject} ${item.body}`,
-          knowledge,
-          3
-        );
-
-        // 3. Response Generation with Gemini 3.8 Flash
-        const generated = await generateAgentEmailReply({
-          subject: item.subject,
-          body: item.body,
-          customerName: item.fromName,
-          agentConfig: agent,
-          retrievedChunks,
-          intent: classification.intent,
-        });
-
-        const threadId = item.threadId || `thr_${Date.now()}_${processed}`;
-
-        // Send Email via Gmail API (AUTOPILOT: mail aslei reply diba)
-        await GmailService.sendEmail({
-          to: item.from,
-          subject: item.subject.startsWith('Re: ') ? item.subject : `Re: ${item.subject}`,
-          body: generated.reply,
-          threadId,
-        });
-
-        const newThread: EmailThread = {
-          id: threadId,
-          businessId: business.id,
-          customerEmail: item.from,
-          customerName: item.fromName,
-          subject: item.subject,
-          snippet: item.snippet || item.body.slice(0, 100) + '...',
-          detectedIntent: classification.intent,
-          status: 'AUTO_REPLIED',
-          confidenceScore: classification.confidence,
-          lastMessageAt: 'Just now',
-          unread: false,
-          matchedKnowledgeIds: retrievedChunks.map(c => c.knowledgeId),
-        };
-
-        const inboundMsg: EmailMessage = {
-          id: item.id || `msg_in_${Date.now()}_${processed}`,
-          threadId,
-          businessId: business.id,
-          sender: item.from,
-          senderName: item.fromName,
-          recipient: gmailAccount.email,
-          direction: 'INBOUND',
-          body: item.body,
-          createdAt: item.date || 'Just now',
-        };
-
-        const outboundMsg: EmailMessage = {
-          id: `msg_out_${Date.now()}_${processed}`,
-          threadId,
-          businessId: business.id,
-          sender: gmailAccount.email,
-          senderName: `${agent.name} (${business.name})`,
-          recipient: item.from,
-          direction: 'OUTBOUND_AI',
-          body: generated.reply,
-          createdAt: 'Just now',
-          matchedKnowledgeSummary: retrievedChunks.map(c => c.title),
-        };
-
-        autoReplied++;
-        processed++;
-
-        setThreads(prev => [newThread, ...prev]);
-        setMessages(prev => ({
-          ...prev,
-          [threadId]: [inboundMsg, outboundMsg],
-        }));
-
-        FirestoreSyncService.saveThread(business.id, newThread);
-      }
-
-      setSubscription(prev => ({
-        ...prev,
-        emailsHandled: prev.emailsHandled + processed,
-      }));
-
-      if (autoReplied > 0) {
-        setGmailAccount(prev => ({
-          ...prev,
-          dailySentCount: prev.dailySentCount + autoReplied,
-        }));
-      }
-
-      addToast({
-        type: 'success',
-        title: 'Gmail Sync Complete ✓',
-        message:
-          processed > 0
-            ? `Processed ${processed} incoming email(s) and sent ${autoReplied} AI auto-replies immediately.`
-            : 'Inbox is up to date. No new customer emails.',
-      });
-
-      return { processedCount: processed, autoRepliedCount: autoReplied };
-    } catch (err: any) {
-      addToast({
-        type: 'error',
-        title: 'Gmail Sync Failed',
-        message: err.message || 'Could not fetch emails from Gmail.',
-      });
-      return { processedCount: 0, autoRepliedCount: 0 };
+      const res = await pollAndAutoReplyGmail();
+      return { processedCount: res.processed, autoRepliedCount: res.processed };
     } finally {
       setIsSyncingGmail(false);
     }
   };
 
-  // Simulates or processes an incoming customer email with immediate Autopilot Reply
-  const simulateIncomingEmail = async (customEmail?: {
+  const simulateIncomingEmail = async (emailData?: {
     subject: string;
     body: string;
     senderEmail: string;
     senderName: string;
   }) => {
-    const emailData = customEmail || {
-      subject: 'Can you provide the price breakdown for a 5-page business site?',
-      body: 'Hi, I would like to learn about your website development package pricing and whether maintenance is included. Thanks!',
-      senderEmail: `client.${Math.floor(Math.random() * 900) + 100}@venturecraft.com`,
-      senderName: 'Morgan Scott',
-    };
+    const threadId = `thr_${Date.now()}`;
+    const subject = emailData?.subject || 'Pricing inquiry for website packages';
+    const body = emailData?.body || 'Hello, I want to know about your Starter package pricing and turnaround.';
+    const sender = emailData?.senderEmail || 'client@example.com';
+    const senderName = emailData?.senderName || 'Prospective Client';
 
-    // 1. Classification
-    const classification = await classifyEmailIntent(emailData.subject, emailData.body);
-
-    // 2. Knowledge Retrieval (RAG)
-    const retrievedChunks = retrieveRelevantKnowledge(
-      `${emailData.subject} ${emailData.body}`,
-      knowledge,
-      3
-    );
-
-    // 3. Response Generation with Gemini 3.8 Flash
+    const classification = await classifyEmailIntent(subject, body, sender);
+    const retrievedChunks = retrieveRelevantKnowledge(`${subject} ${body}`, knowledge, 3);
     const generated = await generateAgentEmailReply({
-      subject: emailData.subject,
-      body: emailData.body,
-      customerName: emailData.senderName,
+      subject,
+      body,
+      customerName: senderName,
+      businessName: business.name,
       agentConfig: agent,
       retrievedChunks,
       intent: classification.intent,
-    });
-
-    const threadId = `thr_${Date.now()}`;
-
-    // Dispatches through Gmail API
-    await GmailService.sendEmail({
-      to: emailData.senderEmail,
-      subject: emailData.subject.startsWith('Re: ') ? emailData.subject : `Re: ${emailData.subject}`,
-      body: generated.reply,
-      threadId,
+      enableWebSearch: true,
     });
 
     const newThread: EmailThread = {
       id: threadId,
       businessId: business.id,
-      customerEmail: emailData.senderEmail,
-      customerName: emailData.senderName,
-      subject: emailData.subject,
-      snippet: emailData.body.slice(0, 100) + '...',
+      customerEmail: sender,
+      customerName: senderName,
+      subject,
+      snippet: body.slice(0, 100),
       detectedIntent: classification.intent,
       status: 'AUTO_REPLIED',
       confidenceScore: classification.confidence,
@@ -792,11 +855,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `msg_in_${Date.now()}`,
       threadId,
       businessId: business.id,
-      sender: emailData.senderEmail,
-      senderName: emailData.senderName,
+      sender,
+      senderName,
       recipient: gmailAccount.email,
       direction: 'INBOUND',
-      body: emailData.body,
+      body,
       createdAt: 'Just now',
     };
 
@@ -806,7 +869,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       businessId: business.id,
       sender: gmailAccount.email,
       senderName: `${agent.name} (${business.name})`,
-      recipient: emailData.senderEmail,
+      recipient: sender,
       direction: 'OUTBOUND_AI',
       body: generated.reply,
       createdAt: 'Just now',
@@ -821,35 +884,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     FirestoreSyncService.saveThread(business.id, newThread);
 
-    setSubscription(prev => ({
-      ...prev,
-      emailsHandled: prev.emailsHandled + 1,
-    }));
-    setGmailAccount(prev => ({
-      ...prev,
-      dailySentCount: prev.dailySentCount + 1,
-    }));
-
     addToast({
       type: 'success',
-      title: 'Email Auto-Replied ✓',
-      message: `AI generated response and delivered reply to ${emailData.senderName} (${emailData.senderEmail})`,
+      title: 'Incoming Email Handled ✓',
+      message: `Auto-replied to "${subject}" from ${senderName}`,
     });
   };
 
-  // Test send live email directly to a real email address
+  // Test live email sender
   const testSendLiveEmail = async (params: {
     toEmail: string;
     customerName?: string;
     subject: string;
     body: string;
   }): Promise<{ success: boolean; reply: string }> => {
-    const classification = await classifyEmailIntent(params.subject, params.body);
-    const retrievedChunks = retrieveRelevantKnowledge(
-      `${params.subject} ${params.body}`,
-      knowledge,
-      3
-    );
+    const classification = await classifyEmailIntent(params.subject, params.body, params.toEmail);
+    const retrievedChunks = retrieveRelevantKnowledge(`${params.subject} ${params.body}`, knowledge, 4);
 
     const generated = await generateAgentEmailReply({
       subject: params.subject,
@@ -862,18 +912,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       enableWebSearch: true,
     });
 
-    const threadId = `thr_test_${Date.now()}`;
-
-    // Execute send via Gmail API with spam-safe colorful HTML and plain text
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
     await GmailService.sendEmail({
       to: params.toEmail,
       subject: params.subject.startsWith('Re: ') ? params.subject : `Re: ${params.subject}`,
       body: generated.reply,
-      threadId,
       senderName: agent.name,
       businessName: business.name,
-    });
+    }, token || undefined);
 
+    // Auto-log to Google Sheets if connected
+    if (googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetId) {
+      GoogleSheetsService.logEmailReply(googleSheetsConfig.spreadsheetId, {
+        timestamp: new Date().toISOString(),
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        clientName: params.customerName || 'Test Client',
+        clientEmail: params.toEmail,
+        subject: params.subject,
+        inquirySummary: params.body.slice(0, 250),
+        replySummary: generated.reply.slice(0, 350),
+        intent: classification.intent,
+        status: 'DELIVERED',
+      }, token || undefined).catch(e => console.warn('Google Sheet append notice:', e));
+
+      setGoogleSheetsConfig(prev => {
+        const next = {
+          ...prev,
+          totalRowsLogged: (prev.totalRowsLogged || 0) + 1,
+          lastSyncedAt: new Date().toISOString(),
+        };
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { googleSheetsConfig: next });
+          FirestoreSyncService.saveSheetsConfig(`biz_${user.uid}`, next);
+        }
+        return next;
+      });
+    }
+
+    const threadId = `thr_live_${Date.now()}`;
     const newThread: EmailThread = {
       id: threadId,
       businessId: business.id,
@@ -941,13 +1018,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { processed: 0 };
     }
 
-    const token = GmailService.getAccessToken();
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
     if (!token || token.startsWith('demo_')) {
       return { processed: 0 };
     }
 
     try {
-      const unreadList = await GmailService.fetchUnreadEmails(5);
+      const unreadList = await GmailService.fetchUnreadEmails(5, token);
       if (!unreadList || unreadList.length === 0) {
         return { processed: 0 };
       }
@@ -957,22 +1034,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (handledMessageIdsRef.current.has(item.id)) continue;
         handledMessageIdsRef.current.add(item.id);
 
-        // Prevent infinite loops while allowing users to test by sending to their own address
+        // Prevent infinite loops: check if message was sent by ourselves
         const isSelf = item.from.toLowerCase().includes(gmailAccount.email.toLowerCase());
         const isReply = item.subject.toLowerCase().startsWith('re: ');
-        const hasOurSignature = (agent.emailSignature && item.body.includes(agent.emailSignature)) || item.body.includes('Customer Support Team');
+        const hasOurSignature =
+          (agent.emailSignature && item.body.includes(agent.emailSignature)) ||
+          item.body.includes('Customer Support Team') ||
+          item.body.includes('Alex Jordan');
 
         if (isSelf && (isReply || hasOurSignature)) {
-          await GmailService.markAsRead(item.id);
+          await GmailService.markAsRead(item.id, token);
           continue;
         }
 
-        // 1. Classification & Spam / Promotional Newsletter Filter
+        // 1. Intent Classification & Spam / Newsletter Filter
         const classification = await classifyEmailIntent(item.subject, item.body, item.from);
 
         if (classification.isAutomatedSpamOrNewsletter) {
-          // Do not send automated replies to bulk marketing newsletters or noreply notifications
-          await GmailService.markAsRead(item.id);
+          await GmailService.markAsRead(item.id, token);
           const spamLog: AutoReplyLog = {
             id: `log_spam_${Date.now()}_${count}`,
             messageId: item.id,
@@ -986,7 +1065,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             status: 'SPAM_SKIPPED',
           };
-          setAutoReplyLogs(prev => [spamLog, ...prev.slice(0, 49)]);
+          setAutoReplyLogs(prev => {
+            const next = [spamLog, ...prev.slice(0, 49)];
+            if (user?.uid) {
+              saveUserLocalData(user.uid, { autoReplyLogs: next });
+              FirestoreSyncService.saveAutoReplyLogs(`biz_${user.uid}`, next);
+            }
+            return next;
+          });
           continue;
         }
 
@@ -994,7 +1080,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const retrievedChunks = retrieveRelevantKnowledge(
           `${item.subject} ${item.body}`,
           knowledge,
-          3
+          4
         );
 
         // 3. Response Generation with Gemini 3.8 Flash (Situation-Aware & Web-Grounded)
@@ -1010,112 +1096,157 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
 
         // 4. Send Email via Gmail API (Immediate Autopilot Reply - Dual Plain/HTML Spam-Safe)
-        const sendRes = await GmailService.sendEmail({
-          to: item.from,
-          subject: item.subject.startsWith('Re: ') ? item.subject : `Re: ${item.subject}`,
-          body: generated.reply,
-          threadId: item.threadId,
-          inReplyTo: item.id,
-          senderName: agent.name,
-          businessName: business.name,
-        });
+        try {
+          const sendRes = await GmailService.sendEmail({
+            to: item.from,
+            subject: item.subject.startsWith('Re: ') ? item.subject : `Re: ${item.subject}`,
+            body: generated.reply,
+            threadId: item.threadId,
+            inReplyTo: item.id,
+            senderName: agent.name,
+            businessName: business.name,
+          }, token);
 
-        // 5. Mark as read in Gmail so we never process again
-        await GmailService.markAsRead(item.id);
+          // 5. Mark as read in Gmail so we never process again
+          await GmailService.markAsRead(item.id, token);
 
-        // 6. Record to autoReplyLogs
-        const newLog: AutoReplyLog = {
-          id: `log_${Date.now()}_${count}`,
-          messageId: sendRes.messageId,
-          fromEmail: item.from,
-          fromName: item.fromName,
-          subject: item.subject,
-          incomingSnippet: item.snippet || item.body.slice(0, 100),
-          replySnippet: generated.reply.slice(0, 140) + '...',
-          fullReply: generated.reply,
-          intent: classification.intent,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          status: 'DELIVERED',
-        };
+          // 6. Record to autoReplyLogs
+          const newLog: AutoReplyLog = {
+            id: `log_${Date.now()}_${count}`,
+            messageId: sendRes.messageId,
+            fromEmail: item.from,
+            fromName: item.fromName,
+            subject: item.subject,
+            incomingSnippet: item.snippet || item.body.slice(0, 100),
+            replySnippet: generated.reply.slice(0, 140) + '...',
+            fullReply: generated.reply,
+            intent: classification.intent,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            status: 'DELIVERED',
+          };
 
-        setAutoReplyLogs(prev => [newLog, ...prev.slice(0, 49)]);
+          setAutoReplyLogs(prev => {
+            const next = [newLog, ...prev.slice(0, 49)];
+            if (user?.uid) {
+              saveUserLocalData(user.uid, { autoReplyLogs: next });
+              FirestoreSyncService.saveAutoReplyLogs(`biz_${user.uid}`, next);
+            }
+            return next;
+          });
 
-        // 7. Update thread
-        const threadId = item.threadId || `thr_${Date.now()}_${count}`;
-        const newThread: EmailThread = {
-          id: threadId,
-          businessId: business.id,
-          customerEmail: item.from,
-          customerName: item.fromName,
-          subject: item.subject,
-          snippet: item.snippet || item.body.slice(0, 100),
-          detectedIntent: classification.intent,
-          status: 'AUTO_REPLIED',
-          confidenceScore: classification.confidence,
-          lastMessageAt: 'Just now',
-          unread: false,
-          matchedKnowledgeIds: retrievedChunks.map(c => c.knowledgeId),
-        };
+          // 7. Auto-append to connected Google Sheet
+          if (googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetId) {
+            GoogleSheetsService.logEmailReply(googleSheetsConfig.spreadsheetId, {
+              timestamp: new Date().toISOString(),
+              date: new Date().toLocaleDateString(),
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              clientName: item.fromName,
+              clientEmail: item.from,
+              subject: item.subject,
+              inquirySummary: item.body.slice(0, 200),
+              replySummary: generated.reply.slice(0, 300),
+              intent: classification.intent,
+              status: 'DELIVERED',
+            }, token).catch(e => console.warn('Google Sheet log error:', e));
 
-        const inboundMsg: EmailMessage = {
-          id: item.id || `msg_in_${Date.now()}_${count}`,
-          threadId,
-          businessId: business.id,
-          sender: item.from,
-          senderName: item.fromName,
-          recipient: gmailAccount.email,
-          direction: 'INBOUND',
-          body: item.body,
-          createdAt: item.date || 'Just now',
-        };
+            setGoogleSheetsConfig(prev => {
+              const next = {
+                ...prev,
+                totalRowsLogged: (prev.totalRowsLogged || 0) + 1,
+                lastSyncedAt: new Date().toISOString(),
+              };
+              if (user?.uid) {
+                saveUserLocalData(user.uid, { googleSheetsConfig: next });
+                FirestoreSyncService.saveSheetsConfig(`biz_${user.uid}`, next);
+              }
+              return next;
+            });
+          }
 
-        const outboundMsg: EmailMessage = {
-          id: `msg_out_${Date.now()}_${count}`,
-          threadId,
-          businessId: business.id,
-          sender: gmailAccount.email,
-          senderName: `${agent.name} (${business.name})`,
-          recipient: item.from,
-          direction: 'OUTBOUND_AI',
-          body: generated.reply,
-          createdAt: 'Just now',
-          matchedKnowledgeSummary: retrievedChunks.map(c => c.title),
-        };
+          // 8. Update thread
+          const threadId = item.threadId || `thr_${Date.now()}_${count}`;
+          const newThread: EmailThread = {
+            id: threadId,
+            businessId: business.id,
+            customerEmail: item.from,
+            customerName: item.fromName,
+            subject: item.subject,
+            snippet: item.snippet || item.body.slice(0, 100),
+            detectedIntent: classification.intent,
+            status: 'AUTO_REPLIED',
+            confidenceScore: classification.confidence,
+            lastMessageAt: 'Just now',
+            unread: false,
+            matchedKnowledgeIds: retrievedChunks.map(c => c.knowledgeId),
+          };
 
-        setThreads(prev => [newThread, ...prev]);
-        setMessages(prev => ({
-          ...prev,
-          [threadId]: [inboundMsg, outboundMsg],
-        }));
+          const inboundMsg: EmailMessage = {
+            id: item.id || `msg_in_${Date.now()}_${count}`,
+            threadId,
+            businessId: business.id,
+            sender: item.from,
+            senderName: item.fromName,
+            recipient: gmailAccount.email,
+            direction: 'INBOUND',
+            body: item.body,
+            createdAt: item.date || 'Just now',
+          };
 
-        FirestoreSyncService.saveThread(business.id, newThread);
+          const outboundMsg: EmailMessage = {
+            id: `msg_out_${Date.now()}_${count}`,
+            threadId,
+            businessId: business.id,
+            sender: gmailAccount.email,
+            senderName: `${agent.name} (${business.name})`,
+            recipient: item.from,
+            direction: 'OUTBOUND_AI',
+            body: generated.reply,
+            createdAt: 'Just now',
+            matchedKnowledgeSummary: retrievedChunks.map(c => c.title),
+          };
 
-        setSubscription(prev => ({
-          ...prev,
-          emailsHandled: prev.emailsHandled + 1,
-        }));
-        setGmailAccount(prev => ({
-          ...prev,
-          dailySentCount: prev.dailySentCount + 1,
-        }));
+          setThreads(prev => [newThread, ...prev]);
+          setMessages(prev => ({
+            ...prev,
+            [threadId]: [inboundMsg, outboundMsg],
+          }));
 
-        count++;
+          FirestoreSyncService.saveThread(business.id, newThread);
 
-        addToast({
-          type: 'success',
-          title: '⚡ Auto-Replied to Email!',
-          message: `Dispatched AI reply to ${item.fromName} (${item.from}) for "${item.subject}"`,
-        });
+          setSubscription(prev => ({
+            ...prev,
+            emailsHandled: prev.emailsHandled + 1,
+          }));
+          setGmailAccount(prev => ({
+            ...prev,
+            dailySentCount: prev.dailySentCount + 1,
+          }));
+
+          count++;
+
+          addToast({
+            type: 'success',
+            title: '⚡ Auto-Replied to Email!',
+            message: `Dispatched AI reply to ${item.fromName} (${item.from}) for "${item.subject}"`,
+          });
+        } catch (sendError: any) {
+          console.error('Failed to send email via Gmail API:', sendError);
+          addToast({
+            type: 'error',
+            title: 'Gmail Reply Error',
+            message: sendError.message || 'Could not send reply via Gmail API.',
+          });
+        }
       }
 
       return { processed: count };
-    } catch (err) {
-      console.warn('Auto responder background cycle error:', err);
+    } catch (err: any) {
+      console.warn('Auto responder background cycle notice:', err);
       return { processed: 0 };
     }
   };
 
-  // Background timer to poll Gmail every 10-12s
+  // Background timer to poll Gmail every 10 seconds
   useEffect(() => {
     if (!isAutoResponderActive || !agent.autoReplyEnabled) return;
 
@@ -1130,15 +1261,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isAutoResponderActive, agent.autoReplyEnabled, gmailAccount.email, knowledge, agent, business]);
+  }, [isAutoResponderActive, agent.autoReplyEnabled, business.name, knowledge, googleSheetsConfig]);
 
-  // Website Crawler & Content Importer
+  // Website Crawler & Content Importer: crawls web data and backs up directly into Google Drive
   const importWebsiteData = async (targetUrl: string): Promise<{ success: boolean; itemsCount: number; data: ExtractedWebsiteData }> => {
     try {
       const data = await WebsiteCrawlerService.crawlWebsite(targetUrl);
       const newItems: KnowledgeItem[] = [];
+      const cleanUrl = data.url;
+      const domainClean = data.domain || targetUrl.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 
-      // 1. Overview knowledge item
+      // 1. Auto-upload structured knowledge file to user's Google Drive in "Mailora_AI_Knowledge_Base"
+      let driveFileId: string | undefined;
+      let driveViewLink: string | undefined;
+
+      try {
+        const docFileName = `Website_Knowledge_${domainClean}_${new Date().toISOString().slice(0, 10)}.txt`;
+        const docContent = `========================================\nWEBSITE KNOWLEDGE BASE: ${cleanUrl}\nDomain: ${data.domain}\nPage Title: ${data.title}\nDescription: ${data.description}\nIndexed At: ${new Date().toISOString()}\n========================================\n\nCORE SERVICES & SOLUTIONS:\n${data.services.map(s => `- ${s}`).join('\n')}\n\nMAIN WEBSITE CONTENT:\n${data.mainText}\n\nCONTACT DETAILS:\nEmails: ${data.contactInfo.emails.join(', ') || 'N/A'}\nPhones: ${data.contactInfo.phones.join(', ') || 'N/A'}`;
+
+        const driveUploadRes = await GoogleDriveService.uploadKnowledgeDocument(
+          docFileName,
+          docContent,
+          'text/plain'
+        );
+        driveFileId = driveUploadRes.fileId;
+        driveViewLink = driveUploadRes.webViewLink;
+      } catch (driveErr) {
+        console.warn('Google Drive auto upload notice:', driveErr);
+      }
+
+      // 2. Overview knowledge item
       const overviewItem: KnowledgeItem = {
         id: `site_overview_${Date.now()}`,
         businessId: business.id,
@@ -1146,6 +1298,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         category: 'Company Information',
         content: `Website URL: ${data.url}\nDomain: ${data.domain}\nPage Title: ${data.title}\nDescription: ${data.description}\n\nMain Content:\n${data.mainText}`,
         sourceUrl: data.url,
+        sourceFileType: 'GOOGLE_DRIVE',
+        sourceDriveFileId: driveFileId,
+        sourceDriveLink: driveViewLink,
         status: 'READY',
         isEnabled: true,
         createdAt: new Date().toISOString(),
@@ -1153,7 +1308,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       newItems.push(overviewItem);
 
-      // 2. Services / Products item
+      // 3. Services / Products item
       if (data.services.length > 0) {
         const servicesItem: KnowledgeItem = {
           id: `site_services_${Date.now()}`,
@@ -1162,6 +1317,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           category: 'Services',
           content: `Key Services & Topics extracted from ${data.url}:\n- ${data.services.join('\n- ')}`,
           sourceUrl: data.url,
+          sourceFileType: 'GOOGLE_DRIVE',
+          sourceDriveFileId: driveFileId,
+          sourceDriveLink: driveViewLink,
           status: 'READY',
           isEnabled: true,
           createdAt: new Date().toISOString(),
@@ -1170,7 +1328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newItems.push(servicesItem);
       }
 
-      // 3. Contact information item
+      // 4. Contact information item
       if (data.contactInfo.emails.length > 0 || data.contactInfo.phones.length > 0) {
         const contactItem: KnowledgeItem = {
           id: `site_contact_${Date.now()}`,
@@ -1179,6 +1337,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           category: 'Contact Information',
           content: `Official Contact Info for ${data.domain}:\nEmails: ${data.contactInfo.emails.join(', ') || 'N/A'}\nPhones: ${data.contactInfo.phones.join(', ') || 'N/A'}\nWebsite: ${data.url}`,
           sourceUrl: data.url,
+          sourceFileType: 'GOOGLE_DRIVE',
+          sourceDriveFileId: driveFileId,
+          sourceDriveLink: driveViewLink,
           status: 'READY',
           isEnabled: true,
           createdAt: new Date().toISOString(),
@@ -1187,7 +1348,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newItems.push(contactItem);
       }
 
-      // 4. Media & visual assets catalog item
+      // 5. Media assets catalog item
       if (data.images.length > 0) {
         const mediaItem: KnowledgeItem = {
           id: `site_media_${Date.now()}`,
@@ -1197,6 +1358,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           content: `Extracted visual assets from ${data.url}:\n${data.images.map(img => `Image: ${img.alt} (URL: ${img.src})`).join('\n')}`,
           sourceUrl: data.url,
           extractedImages: data.images.map(img => img.src),
+          sourceFileType: 'GOOGLE_DRIVE',
+          sourceDriveFileId: driveFileId,
+          sourceDriveLink: driveViewLink,
           status: 'READY',
           isEnabled: true,
           createdAt: new Date().toISOString(),
@@ -1205,16 +1369,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newItems.push(mediaItem);
       }
 
-      // Save to state and firestore
-      setKnowledge(prev => [...newItems, ...prev]);
+      // Save to state, user local storage, and firestore
+      setKnowledge(prev => {
+        const next = [...newItems, ...prev];
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { knowledge: next });
+        }
+        return next;
+      });
+
       for (const item of newItems) {
         FirestoreSyncService.saveKnowledgeItem(business.id, item);
       }
 
       addToast({
         type: 'success',
-        title: 'Website Data Imported ✓',
-        message: `Successfully crawled ${data.domain}: extracted ${newItems.length} knowledge sets & ${data.images.length} images.`,
+        title: 'Website Data Saved to Google Drive & Indexed ✓',
+        message: `Successfully crawled ${data.domain}. Auto-synced to your Google Drive knowledge folder!`,
       });
 
       return { success: true, itemsCount: newItems.length, data };
@@ -1237,6 +1408,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const reader = new FileReader();
       reader.onload = async (e) => {
         const textContent = (e.target?.result as string) || '';
+
+        // Auto-upload to Google Drive as well
+        let driveFileId: string | undefined;
+        let driveLink: string | undefined;
+        try {
+          const driveRes = await GoogleDriveService.uploadKnowledgeDocument(file.name, textContent, 'text/plain');
+          driveFileId = driveRes.fileId;
+          driveLink = driveRes.webViewLink;
+        } catch {}
+
         const newItem: KnowledgeItem = {
           id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
           businessId: business.id,
@@ -1244,20 +1425,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           category,
           content: textContent || `Uploaded file document: ${file.name}`,
           sourceFileName: file.name,
-          sourceFileType: file.type || file.name.split('.').pop()?.toUpperCase() || 'DOCUMENT',
+          sourceFileType: 'GOOGLE_DRIVE',
           sourceFileSize: `${(file.size / 1024).toFixed(1)} KB`,
+          sourceDriveFileId: driveFileId,
+          sourceDriveLink: driveLink,
           status: 'READY',
           isEnabled: true,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
 
-        setKnowledge(prev => [newItem, ...prev]);
+        setKnowledge(prev => {
+          const next = [newItem, ...prev];
+          if (user?.uid) {
+            saveUserLocalData(user.uid, { knowledge: next });
+          }
+          return next;
+        });
+
         FirestoreSyncService.saveKnowledgeItem(business.id, newItem);
 
         addToast({
           type: 'success',
-          title: 'File Uploaded & Indexed ✓',
+          title: 'File Uploaded & Synced to Drive ✓',
           message: `"${file.name}" was parsed and added to your active knowledge base.`,
         });
 
@@ -1302,6 +1492,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supportEmail: data.supportEmail || prev.supportEmail,
         };
         FirestoreSyncService.saveBusiness(updated);
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { business: updated });
+        }
         return updated;
       });
     }
@@ -1319,6 +1512,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           updatedAt: new Date().toISOString(),
         };
         FirestoreSyncService.saveAgentConfig(business.id, updated);
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { agent: updated });
+        }
         return updated;
       });
     }
@@ -1340,6 +1536,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }));
         const combined = [...existingWithoutFaqs, ...newFaqItems];
         newFaqItems.forEach(item => FirestoreSyncService.saveKnowledgeItem(business.id, item));
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { knowledge: combined });
+        }
         return combined;
       });
     }
@@ -1361,6 +1560,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const filtered = prev.filter(k => k.id !== 'custom_bulk_doc' && !k.title.includes('Company Business Knowledge & Policies'));
         const next = [customDoc, ...filtered];
         FirestoreSyncService.saveKnowledgeItem(business.id, customDoc);
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { knowledge: next });
+        }
         return next;
       });
     }
@@ -1376,15 +1578,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const tmpl = BUSINESS_TEMPLATES[templateKey];
     if (!tmpl) return;
 
-    setBusiness(prev => ({
-      ...prev,
-      industry: tmpl.name,
-    }));
+    setBusiness(prev => {
+      const updated = {
+        ...prev,
+        industry: tmpl.name,
+      };
+      if (user?.uid) saveUserLocalData(user.uid, { business: updated });
+      return updated;
+    });
 
-    setAgent(prev => ({
-      ...prev,
-      instructions: tmpl.sampleInstruction,
-    }));
+    setAgent(prev => {
+      const updated = {
+        ...prev,
+        instructions: tmpl.sampleInstruction,
+      };
+      if (user?.uid) saveUserLocalData(user.uid, { agent: updated });
+      return updated;
+    });
 
     const newFaqs: KnowledgeItem[] = tmpl.suggestedFAQs.map((faq, idx) => ({
       id: `kb_tmpl_${Date.now()}_${idx}`,
@@ -1398,7 +1608,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString(),
     }));
 
-    setKnowledge(prev => [...newFaqs, ...prev]);
+    setKnowledge(prev => {
+      const next = [...newFaqs, ...prev];
+      if (user?.uid) saveUserLocalData(user.uid, { knowledge: next });
+      return next;
+    });
 
     addToast({
       type: 'success',
@@ -1432,6 +1646,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pollAndAutoReplyGmail,
         isGoogleAuthenticated,
         connectGoogleAccount,
+        googleSheetsConfig,
+        connectGoogleSheet,
+        disconnectGoogleSheet,
+        exportActivityToCsv,
+        connectGoogleDrive,
         user,
         business,
         agent,

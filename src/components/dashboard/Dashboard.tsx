@@ -32,6 +32,10 @@ import {
   FileCheck,
   Sliders,
   SendHorizontal,
+  FileSpreadsheet,
+  Download,
+  Link as LinkIcon,
+  Info,
 } from 'lucide-react';
 import { KnowledgeCategory, AgentTone, ReplyLanguage } from '../../types';
 import { ExtractedWebsiteData } from '../../services/websiteCrawlerService';
@@ -59,8 +63,19 @@ export const Dashboard: React.FC = () => {
     isSyncingGmail,
     isGoogleAuthenticated,
     connectGoogleAccount,
+    googleSheetsConfig,
+    connectGoogleSheet,
+    disconnectGoogleSheet,
+    exportActivityToCsv,
+    connectGoogleDrive,
     addToast,
   } = useApp();
+
+  // Google Sheets state
+  const [isConnectingSheet, setIsConnectingSheet] = useState(false);
+  const [customSheetUrl, setCustomSheetUrl] = useState('');
+  const [showCustomSheetInput, setShowCustomSheetInput] = useState(false);
+  const [showUnverifiedGuide, setShowUnverifiedGuide] = useState(false);
 
   // All Data Input State Tabs
   const [activeDataTab, setActiveDataTab] = useState<
@@ -436,7 +451,262 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Top Dual Hub: Google Workspace Connection (5 cols) + Real-time Deliverability & Live Activity Stream (7 cols) */}
+      {/* Google Sign-in Verification Explainer Banner */}
+      <div className="rounded-2xl bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-slate-900 border border-amber-500/30 p-4 text-xs text-slate-300 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-lg">
+        <div className="flex items-start gap-2.5">
+          <div className="w-7 h-7 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+            <Info className="w-4 h-4" />
+          </div>
+          <div>
+            <span className="font-extrabold text-white block">
+              Google Login Notice: &quot;Google hasn&apos;t verified this app&quot;
+            </span>
+            <span className="text-slate-300">
+              When logging in with Google, click <strong className="text-amber-300">&quot;Advanced&quot; (উন্নত)</strong> &rarr; then click <strong className="text-amber-300">&quot;Go to ... (Continue)&quot;</strong>. This is Google&apos;s standard developer test screen for new private workspace apps.
+            </span>
+          </div>
+        </div>
+
+        <button
+          onClick={() => setShowUnverifiedGuide(!showUnverifiedGuide)}
+          className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline shrink-0 whitespace-nowrap self-end md:self-center"
+        >
+          {showUnverifiedGuide ? 'Hide details' : 'How to login verified ↗'}
+        </button>
+      </div>
+
+      {showUnverifiedGuide && (
+        <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-300 space-y-2 animate-in fade-in">
+          <h4 className="font-extrabold text-amber-300">Google OAuth Verification Explanation:</h4>
+          <ol className="list-decimal pl-5 space-y-1 text-slate-400 text-[11px]">
+            <li>Google Cloud Console requires security audits (CASA Tier 2) before removing the test app banner for sensitive Gmail/Drive scopes.</li>
+            <li>In development mode, Google automatically displays: <em>&quot;You&apos;ve been given access to an app that&apos;s currently being tested&quot;</em>.</li>
+            <li>Click <strong>Advanced</strong> on the bottom left of the Google consent window, then click <strong>&quot;Go to ... (unsafe) / Continue&quot;</strong> to grant access. Your emails, tokens, and data stay 100% private to your account.</li>
+          </ol>
+        </div>
+      )}
+
+      {/* TOP PROMINENT ROW: Google Drive Cloud Central + Google Sheets Live Reports */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* 1. Google Drive Cloud Knowledge Central Card */}
+        <div className="rounded-3xl bg-gradient-to-br from-[#121008] via-[#0d1322] to-slate-950 border border-amber-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-48 h-48 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div className="space-y-3 relative z-10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-md">
+                  <HardDrive className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-extrabold text-white">Google Drive Cloud Knowledge Central</h3>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      Cloud Central
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">Single Source of Truth for all Business Knowledge</p>
+                </div>
+              </div>
+
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  isGoogleAuthenticated
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                }`}
+              >
+                {isGoogleAuthenticated ? 'Drive Synced ✓' : 'Drive Access Needed'}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              All website crawls, product catalogs, and documents are backed up into your private Google Drive folder (<code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">Mailora_AI_Knowledge_Base</code>). Mailora AI accesses your Google Drive to answer customer inquiries with 100% accuracy.
+            </p>
+
+            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+              <div>
+                <span>Indexed Drive Docs:</span>
+                <strong className="text-white ml-1.5 font-mono">
+                  {knowledge.filter(k => k.sourceFileType === 'GOOGLE_DRIVE' || k.sourceDriveFileId).length} files
+                </strong>
+              </div>
+              <div className="text-right">
+                <span>Account:</span>
+                <span className="text-slate-300 ml-1 font-mono font-medium truncate max-w-[150px] inline-block align-bottom">
+                  {gmailAccount.email}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-2 relative z-10">
+            <button
+              onClick={() => connectGoogleDrive()}
+              className="py-2.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2"
+            >
+              <HardDrive className="w-4 h-4" />
+              <span>Connect & Sync Google Drive ↗</span>
+            </button>
+
+            <a
+              href="https://drive.google.com/drive/my-drive"
+              target="_blank"
+              rel="noreferrer"
+              className="py-2.5 px-3.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1.5"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Open My Drive ↗</span>
+            </a>
+          </div>
+        </div>
+
+        {/* 2. Google Sheets Live Activity Reports Card */}
+        <div className="rounded-3xl bg-gradient-to-br from-[#071714] via-[#0d1322] to-slate-950 border border-emerald-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div className="space-y-3 relative z-10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-extrabold text-white">Google Sheets Live Client Report</h3>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      Live Export
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">Date-wise client list & subject report auto-added</p>
+                </div>
+              </div>
+
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  googleSheetsConfig.isConnected
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                }`}
+              >
+                {googleSheetsConfig.isConnected ? 'Auto-Log Active ✓' : 'Not Connected'}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Every time Mailora AI replies to a client email, a row is automatically added to your connected Google Sheet with the date, time, client name, email, subject, inquiry snippet, and AI reply summary.
+            </p>
+
+            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+              <div>
+                <span>Total Replies Logged:</span>
+                <strong className="text-white ml-1.5 font-mono">
+                  {googleSheetsConfig.totalRowsLogged || autoReplyLogs.length} rows
+                </strong>
+              </div>
+              <div className="text-right">
+                <span>Spreadsheet Status:</span>
+                <span className="text-emerald-400 font-semibold ml-1">
+                  {googleSheetsConfig.isConnected ? 'Auto-Sync ON' : 'Ready to Connect'}
+                </span>
+              </div>
+            </div>
+
+            {showCustomSheetInput && (
+              <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+                <label className="text-[11px] font-bold text-slate-300 block">
+                  Paste Google Sheet URL or ID:
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={customSheetUrl}
+                    onChange={e => setCustomSheetUrl(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/..."
+                    className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      setIsConnectingSheet(true);
+                      await connectGoogleSheet(customSheetUrl);
+                      setIsConnectingSheet(false);
+                      setShowCustomSheetInput(false);
+                    }}
+                    disabled={isConnectingSheet}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shrink-0"
+                  >
+                    {isConnectingSheet ? 'Linking...' : 'Link Sheet'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5 pt-2 relative z-10">
+            {googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetUrl ? (
+              <>
+                <a
+                  href={googleSheetsConfig.spreadsheetUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="py-2.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center gap-2"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Open Live Google Sheet ↗</span>
+                </a>
+
+                <button
+                  onClick={() => exportActivityToCsv()}
+                  className="py-2.5 px-3.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1.5"
+                >
+                  <Download className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Download Excel / CSV</span>
+                </button>
+
+                <button
+                  onClick={() => disconnectGoogleSheet()}
+                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-rose-950/30 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/40 text-xs font-semibold transition-all"
+                >
+                  Disconnect
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={async () => {
+                    setIsConnectingSheet(true);
+                    await connectGoogleSheet();
+                    setIsConnectingSheet(false);
+                  }}
+                  disabled={isConnectingSheet}
+                  className="py-2.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center gap-2"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>{isConnectingSheet ? 'Creating Sheet...' : '⚡ Auto-Create & Link Google Sheet'}</span>
+                </button>
+
+                <button
+                  onClick={() => setShowCustomSheetInput(!showCustomSheetInput)}
+                  className="py-2.5 px-3.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1.5"
+                >
+                  <LinkIcon className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Link Existing Sheet</span>
+                </button>
+
+                <button
+                  onClick={() => exportActivityToCsv()}
+                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-semibold transition-all flex items-center gap-1"
+                >
+                  <Download className="w-3.5 h-3.5 text-sky-400" />
+                  <span>CSV</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Top Dual Hub: Google Workspace Connection (5 cols) + Real-time Deliverability & Live Activity Stream (7 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column (5 cols): Connected Gmail Account & Auth Controls */}
         <div className="lg:col-span-5 rounded-3xl bg-[#0d1322]/90 border border-slate-800 p-6 shadow-xl flex flex-col justify-between space-y-6">

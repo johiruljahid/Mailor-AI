@@ -62,6 +62,14 @@ service cloud.firestore {
         allow write: if hasBusinessAccess(businessId);
       }
 
+      match /sheets/{sheetId} {
+        allow read, write: if hasBusinessAccess(businessId);
+      }
+
+      match /logs/{logId} {
+        allow read, write: if hasBusinessAccess(businessId);
+      }
+
       match /auditLogs/{logId} {
         allow read, create: if hasBusinessAccess(businessId);
       }

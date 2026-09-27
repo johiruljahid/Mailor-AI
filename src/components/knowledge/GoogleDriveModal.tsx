@@ -32,10 +32,13 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({ isOpen, onCl
     addToast,
     user,
     gmailAccount,
+    isGoogleAuthenticated,
+    connectGoogleAccount,
   } = useApp();
 
   const [files, setFiles] = useState<GoogleDriveFile[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isConnectingGoogle, setIsConnectingGoogle] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFile, setSelectedFile] = useState<GoogleDriveFile | null>(null);
   const [previewContent, setPreviewContent] = useState<string>('');
@@ -72,6 +75,16 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({ isOpen, onCl
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleConnectAndLoad = async () => {
+    setIsConnectingGoogle(true);
+    try {
+      await connectGoogleAccount();
+      await loadDriveFiles();
+    } finally {
+      setIsConnectingGoogle(false);
     }
   };
 
@@ -243,6 +256,23 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Search & Filter Toolbar */}
+        {!isGoogleAuthenticated && (
+          <div className="p-3.5 bg-amber-500/15 border-b border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 text-amber-300">
+              <HardDrive className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Google Drive not yet authorized for this session. Connect your Google account to browse and sync files.</span>
+            </div>
+            <button
+              onClick={handleConnectAndLoad}
+              disabled={isConnectingGoogle}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shrink-0 flex items-center gap-1.5 shadow-md shadow-amber-500/20"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isConnectingGoogle ? 'animate-spin' : ''}`} />
+              <span>{isConnectingGoogle ? 'Connecting...' : '🔑 Connect Google Drive Now'}</span>
+            </button>
+          </div>
+        )}
+
         <div className="p-4 border-b border-slate-800/80 bg-slate-950/50 flex flex-col sm:flex-row items-center gap-3 justify-between">
           <div className="relative w-full sm:w-80">
             <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
