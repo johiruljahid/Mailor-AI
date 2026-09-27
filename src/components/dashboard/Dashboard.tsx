@@ -265,6 +265,12 @@ export const Dashboard: React.FC = () => {
       const res = await importWebsiteData(targetWebsiteUrl.trim());
       setCrawlProgressStep(4);
       setLastCrawledData(res.data);
+      if (res.data.domain) {
+        const brand = res.data.domain.split('.')[0].replace(/-/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
+        if (businessName === 'Nexus Digital Labs' || !businessName) {
+          setBusinessName(brand);
+        }
+      }
     } catch (err: any) {
       console.warn('Crawl error:', err);
     } finally {
@@ -615,10 +621,17 @@ export const Dashboard: React.FC = () => {
                     {log.replySnippet}
                   </div>
                   <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
-                    <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Delivered via Gmail API
-                    </span>
+                    {log.status === 'SPAM_SKIPPED' ? (
+                      <span className="text-amber-400 font-semibold flex items-center gap-1">
+                        <ShieldCheck className="w-3 h-3 text-amber-400" />
+                        Filtered: Newsletter / Bot (Ignored)
+                      </span>
+                    ) : (
+                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        Delivered via Gmail API
+                      </span>
+                    )}
                     <span className="text-slate-500">Intent: {log.intent}</span>
                   </div>
                 </div>
@@ -1033,6 +1046,34 @@ export const Dashboard: React.FC = () => {
         {/* Tab 4: Manual File Upload & Bulk Document Paste */}
         {activeDataTab === 'manual_upload' && (
           <div className="space-y-6 animate-in fade-in">
+            {/* Google Drive Central Knowledge Hub (Recommended) */}
+            <div className="p-6 rounded-3xl bg-gradient-to-r from-amber-950/30 via-indigo-950/20 to-slate-950 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl">
+              <div className="space-y-1.5 max-w-xl">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                    <HardDrive className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-sm font-extrabold text-white">
+                    Google Drive Cloud Knowledge Repository (Recommended)
+                  </h3>
+                  <span className="text-[10px] font-bold text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/30">
+                    Cloud Central
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Keep all your business documents (PDFs, Docs, Spreadsheets) stored securely in your Google Drive. Once connected, Mailora AI automatically accesses your Drive files, website data, and manual notes to answer client inquiries with 100% precision.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setIsDriveModalOpen(true)}
+                className="py-2.5 px-5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2 shrink-0"
+              >
+                <HardDrive className="w-4 h-4" />
+                <span>Connect & Sync Google Drive ↗</span>
+              </button>
+            </div>
+
             {/* Drag & Drop Upload Zone */}
             <div
               onDragEnter={handleDrag}

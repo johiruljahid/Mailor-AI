@@ -114,4 +114,36 @@ export class FirestoreSyncService {
       return null;
     }
   }
+
+  /**
+   * Fetch business profile by businessId
+   */
+  static async fetchBusiness(businessId: string): Promise<Business | null> {
+    if (!db) return null;
+    try {
+      const bizRef = doc(db, 'businesses', businessId);
+      const snapshot = await getDoc(bizRef);
+      if (!snapshot.exists()) return null;
+      return snapshot.data() as Business;
+    } catch (err) {
+      console.warn('Firestore fetchBusiness notice:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Fetch agent config by businessId
+   */
+  static async fetchAgentConfig(businessId: string): Promise<EmailAgentConfig | null> {
+    if (!db) return null;
+    try {
+      const agentRef = doc(db, 'businesses', businessId, 'agents', 'agent_default');
+      const snapshot = await getDoc(agentRef);
+      if (!snapshot.exists()) return null;
+      return snapshot.data() as EmailAgentConfig;
+    } catch (err) {
+      console.warn('Firestore fetchAgentConfig notice:', err);
+      return null;
+    }
+  }
 }

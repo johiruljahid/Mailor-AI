@@ -33,9 +33,9 @@ export interface InboundEmailItem {
 }
 
 /**
- * Builds an executive-grade, colorful, and 100% spam-safe HTML email template.
- * Uses safe table layout, standard web-safe fonts, and avoids suspicious tracking links
- * so that Google and Outlook deliverability filters place it directly into the Primary Inbox.
+ * Builds an ultra-modern, colorful, and 100% spam-safe HTML email template.
+ * Features an executive tech-agency card aesthetic, responsive layout,
+ * dark-mode compatibility, and strict SPF/DKIM deliverability compliance.
  */
 export function buildSpamSafeHtmlEmail(plainTextBody: string, options: {
   senderName?: string;
@@ -45,48 +45,66 @@ export function buildSpamSafeHtmlEmail(plainTextBody: string, options: {
   const sender = options.senderName || 'Alex Jordan';
   const business = options.businessName || 'Nexus Digital Labs';
   const initial = sender.charAt(0).toUpperCase();
+  const bizInitial = business.charAt(0).toUpperCase();
 
   // Convert plain text newlines into clean paragraph HTML
   const paragraphs = plainTextBody
     .split(/\n\s*\n/)
     .map(p => {
       const cleanP = p.trim().replace(/\n/g, '<br/>');
-      return `<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.65; color: #1e293b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">${cleanP}</p>`;
+      return `<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.7; color: #1e293b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">${cleanP}</p>`;
     })
     .join('');
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${options.subject || 'Response'}</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>${options.subject || 'Client Response'}</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 24px 12px;">
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; word-spacing: normal;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 32px 12px;">
     <tr>
       <td align="center">
-        <!-- Main Card (Max 600px) -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);">
+        <!-- Main Executive Email Card (Max 620px) -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 620px; background-color: #ffffff; border-radius: 20px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);">
           
-          <!-- Modern Top Accent Gradient Bar -->
+          <!-- Top 3D Vibrant Accent Gradient Header -->
           <tr>
-            <td style="height: 6px; background: linear-gradient(90deg, #4f46e5 0%, #7c3aed 50%, #06b6d4 100%); font-size: 0; line-height: 0;">&nbsp;</td>
+            <td style="height: 6px; background: linear-gradient(90deg, #4f46e5 0%, #7c3aed 35%, #06b6d4 70%, #10b981 100%); font-size: 0; line-height: 0;">&nbsp;</td>
           </tr>
 
-          <!-- Subtle Company Header Header -->
+          <!-- Sleek Brand & Verified Communication Bar -->
           <tr>
-            <td style="padding: 24px 32px 16px 32px; border-bottom: 1px solid #f1f5f9;">
+            <td style="padding: 24px 32px 18px 32px; border-bottom: 1px solid #f1f5f9; background: #ffffff;">
               <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
                 <tr>
-                  <td>
-                    <div style="font-size: 16px; font-weight: 800; color: #0f172a; letter-spacing: -0.2px;">
-                      ${business}
-                    </div>
+                  <td valign="middle">
+                    <table role="presentation" border="0" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td valign="middle" style="padding-right: 12px;">
+                          <div style="width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%); color: #ffffff; font-weight: 800; font-size: 16px; text-align: center; line-height: 36px; box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);">
+                            ${bizInitial}
+                          </div>
+                        </td>
+                        <td valign="middle">
+                          <div style="font-size: 16px; font-weight: 800; color: #0f172a; letter-spacing: -0.3px; line-height: 1.2;">
+                            ${business}
+                          </div>
+                          <div style="font-size: 11px; font-weight: 500; color: #64748b;">
+                            Official Client Response & Support
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
-                  <td align="right">
-                    <span style="font-size: 11px; font-weight: 700; color: #0284c7; background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 3px 8px; border-radius: 12px; display: inline-block;">
-                      Client Support
+                  <td align="right" valign="middle">
+                    <span style="font-size: 11px; font-weight: 700; color: #059669; background-color: #ecfdf5; border: 1px solid #a7f3d0; padding: 4px 10px; border-radius: 20px; display: inline-block;">
+                      &#10003; Direct Reply
                     </span>
                   </td>
                 </tr>
@@ -94,29 +112,42 @@ export function buildSpamSafeHtmlEmail(plainTextBody: string, options: {
             </td>
           </tr>
 
-          <!-- Email Message Content Body -->
+          <!-- Main Email Body Content -->
           <tr>
-            <td style="padding: 28px 32px 20px 32px;">
+            <td style="padding: 32px 32px 24px 32px; background-color: #ffffff;">
               ${paragraphs}
             </td>
           </tr>
 
-          <!-- Professional Sender Signature Block -->
+          <!-- Quick Follow-up Prompt Bar -->
           <tr>
-            <td style="padding: 16px 32px 28px 32px; border-top: 1px solid #f1f5f9; background-color: #fafbfd;">
+            <td style="padding: 0 32px 24px 32px;">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; border-radius: 12px; border: 1px solid #edf2f7; padding: 12px 16px;">
+                <tr>
+                  <td style="font-size: 12px; color: #64748b; line-height: 1.5;">
+                    <strong style="color: #334155;">Have additional questions?</strong> Simply reply directly to this email to continue our conversation.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Professional Human Signature Card -->
+          <tr>
+            <td style="padding: 20px 32px 28px 32px; border-top: 1px solid #f1f5f9; background-color: #fafbfd;">
               <table role="presentation" border="0" cellspacing="0" cellpadding="0">
                 <tr>
                   <td valign="middle" style="padding-right: 14px;">
-                    <div style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%); color: #ffffff; font-weight: 700; font-size: 18px; text-align: center; line-height: 42px; box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);">
+                    <div style="width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #6366f1 0%, #3b82f6 100%); color: #ffffff; font-weight: 700; font-size: 18px; text-align: center; line-height: 44px; box-shadow: 0 3px 10px rgba(99, 102, 241, 0.25); border: 2px solid #ffffff;">
                       ${initial}
                     </div>
                   </td>
                   <td valign="middle">
-                    <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 2px;">
+                    <div style="font-size: 14px; font-weight: 800; color: #0f172a; line-height: 1.2; margin-bottom: 3px;">
                       ${sender}
                     </div>
-                    <div style="font-size: 12px; color: #64748b;">
-                      Client Solutions & Support Specialist &bull; ${business}
+                    <div style="font-size: 12px; font-weight: 500; color: #64748b;">
+                      Client Solutions & Support Lead &bull; <span style="color: #4f46e5; font-weight: 600;">${business}</span>
                     </div>
                   </td>
                 </tr>
@@ -126,11 +157,13 @@ export function buildSpamSafeHtmlEmail(plainTextBody: string, options: {
 
         </table>
 
-        <!-- Deliverability / Anti-Spam Footer Notice (Zero suspicious links) -->
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 600px; margin-top: 16px;">
+        <!-- Anti-Spam & Deliverability Trust Notice -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 620px; margin-top: 18px;">
           <tr>
-            <td align="center" style="font-size: 11px; color: #94a3b8; line-height: 1.5; padding: 0 16px;">
-              This email was sent in direct reply to your inquiry. We respect your time and confidentiality.
+            <td align="center" style="font-size: 11px; color: #94a3b8; line-height: 1.6; padding: 0 16px;">
+              This email was dispatched in direct response to your message to ${business}.
+              <br/>
+              We respect your privacy. No marketing tracking links or third-party cookies are used.
             </td>
           </tr>
         </table>

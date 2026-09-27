@@ -36,9 +36,29 @@ export class WebsiteCrawlerService {
     }
 
     const domain = new URL(cleanUrl).hostname.replace(/^www\./, '');
+
+    // Attempt 1: Call full-stack server crawler endpoint (zero CORS barriers)
+    try {
+      const serverRes = await fetch('/api/crawl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: cleanUrl }),
+        signal: AbortSignal.timeout(9000),
+      });
+
+      if (serverRes.ok) {
+        const data = await serverRes.json();
+        if (data.title && data.mainText) {
+          return data;
+        }
+      }
+    } catch {
+      // Fall through to client proxy
+    }
+
     let htmlContent = '';
 
-    // Attempt 1: Direct fetch with standard CORS proxies fallback
+    // Attempt 2: Direct fetch with standard CORS proxies fallback
     try {
       // First try standard CORS-friendly proxy
       const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(cleanUrl)}`;

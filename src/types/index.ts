@@ -216,7 +216,7 @@ export interface AutoReplyLog {
   fullReply: string;
   intent: EmailIntent | string;
   timestamp: string;
-  status: 'DELIVERED' | 'SENT';
+  status: 'DELIVERED' | 'SENT' | 'SPAM_SKIPPED';
 }
 
 export interface ToastNotification {

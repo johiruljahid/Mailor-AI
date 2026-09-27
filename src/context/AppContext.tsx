@@ -142,7 +142,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isSyncingGmail, setIsSyncingGmail] = useState(false);
 
   // Background Auto-Responder Engine
-  const [isAutoResponderActive, setIsAutoResponderActive] = useState(true);
+  const [isAutoResponderActive, setIsAutoResponderActiveState] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('mailora_auto_responder_active');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const setIsAutoResponderActive = (active: boolean) => {
+    setIsAutoResponderActiveState(active);
+    try {
+      localStorage.setItem('mailora_auto_responder_active', String(active));
+    } catch {}
+  };
   const [autoScanCountdown, setAutoScanCountdown] = useState(10);
   const handledMessageIdsRef = useRef<Set<string>>(new Set());
   const [isGoogleAuthenticated, setIsGoogleAuthenticated] = useState<boolean>(() => {
@@ -198,19 +212,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const unsubscribe = initAuth(
       (authUser, token) => {
         const authenticEmail = authUser.email || 'johirul4856@gmail.com';
+        const userBizId = `biz_${authUser.uid}`;
         const profile: UserProfile = {
           uid: authUser.uid,
           email: authenticEmail,
-          displayName: authUser.displayName || authenticEmail.split('@')[0] || 'Johirul Islam',
+          displayName: authUser.displayName || authenticEmail.split('@')[0] || 'User',
           photoURL: authUser.photoURL || undefined,
-          businessId: business.id,
+          businessId: userBizId,
           role: 'owner',
           createdAt: new Date().toISOString(),
         };
         setUser(profile);
+        setBusiness(prev => ({
+          ...prev,
+          id: userBizId,
+          ownerUid: authUser.uid,
+          supportEmail: authenticEmail,
+        }));
         setCachedAccessToken(token);
         GmailService.setAccessToken(token);
         GoogleDriveService.setAccessToken(token);
+        setIsGoogleAuthenticated(Boolean(token && !token.startsWith('demo_')));
         setGmailAccount(prev => ({
           ...prev,
           email: authenticEmail,
@@ -221,13 +243,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           lastVerifiedAt: new Date().toISOString(),
         }));
         FirestoreSyncService.saveUserProfile(profile);
+
+        // Fetch user-isolated business profile, agent rules, and knowledge base
+        FirestoreSyncService.fetchBusiness(userBizId).then(savedBiz => {
+          if (savedBiz) setBusiness(savedBiz);
+        });
+        FirestoreSyncService.fetchAgentConfig(userBizId).then(savedAgent => {
+          if (savedAgent) setAgent(savedAgent);
+        });
+        FirestoreSyncService.fetchKnowledge(userBizId).then(savedKnowledge => {
+          if (savedKnowledge && savedKnowledge.length > 0) setKnowledge(savedKnowledge);
+        });
       },
       () => {
         // Not authenticated
       }
     );
     return () => unsubscribe();
-  }, [business.id]);
+  }, []);
 
   const addToast = (toast: Omit<ToastNotification, 'id'>) => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
@@ -903,6 +936,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Background Auto-Responder Engine: polls unread emails and replies in 100% Autopilot
   const pollAndAutoReplyGmail = async (): Promise<{ processed: number }> => {
+    // If the Auto-Responder switch is turned OFF by the user, immediately stop and do not reply!
+    if (!isAutoResponderActive) {
+      return { processed: 0 };
+    }
+
     const token = GmailService.getAccessToken();
     if (!token || token.startsWith('demo_')) {
       return { processed: 0 };
@@ -929,10 +967,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           continue;
         }
 
-        // 1. Classification
-        const classification = await classifyEmailIntent(item.subject, item.body);
+        // 1. Classification & Spam / Promotional Newsletter Filter
+        const classification = await classifyEmailIntent(item.subject, item.body, item.from);
 
-        // 2. Knowledge Retrieval (RAG)
+        if (classification.isAutomatedSpamOrNewsletter) {
+          // Do not send automated replies to bulk marketing newsletters or noreply notifications
+          await GmailService.markAsRead(item.id);
+          const spamLog: AutoReplyLog = {
+            id: `log_spam_${Date.now()}_${count}`,
+            messageId: item.id,
+            fromEmail: item.from,
+            fromName: item.fromName,
+            subject: item.subject,
+            incomingSnippet: item.snippet || item.body.slice(0, 100),
+            replySnippet: '[Filtered: Automated Newsletter or Notification — Auto-reply suppressed]',
+            fullReply: '',
+            intent: 'Spam',
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            status: 'SPAM_SKIPPED',
+          };
+          setAutoReplyLogs(prev => [spamLog, ...prev.slice(0, 49)]);
+          continue;
+        }
+
+        // 2. Knowledge Retrieval (RAG) across Google Drive, Website, and Manual entries
         const retrievedChunks = retrieveRelevantKnowledge(
           `${item.subject} ${item.body}`,
           knowledge,
