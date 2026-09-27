@@ -63,6 +63,8 @@ export interface KnowledgeItem {
   sourceFileSize?: string;
   sourceDriveFileId?: string;
   sourceDriveLink?: string;
+  sourceUrl?: string;
+  extractedImages?: string[];
   lastDriveSyncAt?: string;
   status: 'READY' | 'PROCESSING' | 'FAILED';
   isEnabled: boolean;

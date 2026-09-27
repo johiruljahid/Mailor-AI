@@ -101,32 +101,40 @@ export const KnowledgeBasePage: React.FC = () => {
     const file = files[0];
     setIsUploading(true);
 
-    setTimeout(() => {
-      // Create knowledge item from upload
-      const sampleContents: Record<string, string> = {
-        pdf: `Comprehensive Service Level Agreement & Delivery Framework:\n1. All design mockups delivered in Figma within 5 working days.\n2. Revisions are addressed within 48 hours.\n3. Final delivery includes production code, asset export, and DNS configuration support.`,
-        docx: `Employee Handbook & Brand Identity Guidelines:\nOur company tone is warm, empathetic, and professional. Always address clients by their first name and maintain rigorous clarity.`,
-        csv: `SKU,Item,Price,LeadTime\nNX-01,Basic Audit,$999,3 days\nNX-02,Full Rebrand,$4500,2 weeks\nNX-03,Enterprise Retainer,$8000/mo,Ongoing`,
-      };
-
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'txt';
-      const extractedContent =
-        sampleContents[ext] ||
-        `Verified Documentation for ${file.name}:\nThis document contains verified company guidelines, specifications, and operational parameters processed into chunked knowledge.`;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = (event.target?.result as string) || '';
+      const ext = file.name.split('.').pop()?.toUpperCase() || 'FILE';
 
       addKnowledgeItem({
         title: file.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
-        category: 'Services',
-        content: extractedContent,
+        category: 'Company Information',
+        content: text || `Uploaded document content for ${file.name}`,
         status: 'READY',
         isEnabled: true,
         sourceFileName: file.name,
-        sourceFileType: ext.toUpperCase(),
-        sourceFileSize: `${Math.round(file.size / 1024 || 45)} KB`,
+        sourceFileType: ext,
+        sourceFileSize: `${Math.round(file.size / 1024 || 1)} KB`,
       });
 
+      addToast({
+        type: 'success',
+        title: 'Document Uploaded & Parsed ✓',
+        message: `"${file.name}" added to active knowledge base.`,
+      });
       setIsUploading(false);
-    }, 800);
+    };
+
+    reader.onerror = () => {
+      setIsUploading(false);
+      addToast({
+        type: 'error',
+        title: 'Upload Failed',
+        message: 'Could not read file contents.',
+      });
+    };
+
+    reader.readAsText(file);
   };
 
   const handleResyncFromDrive = async (item: KnowledgeItem) => {

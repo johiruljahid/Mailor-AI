@@ -34,6 +34,7 @@ import { classifyEmailIntent, generateAgentEmailReply } from '../lib/gemini';
 import { GmailService } from '../services/gmailService';
 import { GoogleDriveService } from '../services/googleDriveService';
 import { FirestoreSyncService } from '../services/firestoreSync';
+import { WebsiteCrawlerService, ExtractedWebsiteData } from '../services/websiteCrawlerService';
 import { setCachedAccessToken, initAuth, logoutUser, signInWithGoogle } from '../services/firebaseAuth';
 
 export type AppView =
@@ -108,6 +109,8 @@ interface AppContextType {
   syncGmailInbox: () => Promise<{ processedCount: number; autoRepliedCount: number }>;
   simulateIncomingEmail: (emailData?: { subject: string; body: string; senderEmail: string; senderName: string }) => Promise<void>;
   testSendLiveEmail: (params: { toEmail: string; customerName?: string; subject: string; body: string }) => Promise<{ success: boolean; reply: string }>;
+  importWebsiteData: (url: string) => Promise<{ success: boolean; itemsCount: number; data: ExtractedWebsiteData }>;
+  uploadKnowledgeFile: (file: File, category?: KnowledgeCategory) => Promise<{ success: boolean; filename: string }>;
   applyBusinessTemplate: (templateKey: string) => void;
   saveAllSetupData: (data: {
     businessName?: string;
@@ -818,20 +821,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const generated = await generateAgentEmailReply({
       subject: params.subject,
       body: params.body,
-      customerName: params.customerName || 'Test Customer',
+      customerName: params.customerName || 'Valued Customer',
+      businessName: business.name,
       agentConfig: agent,
       retrievedChunks,
       intent: classification.intent,
+      enableWebSearch: true,
     });
 
     const threadId = `thr_test_${Date.now()}`;
 
-    // Execute send via Gmail API
+    // Execute send via Gmail API with spam-safe colorful HTML and plain text
     await GmailService.sendEmail({
       to: params.toEmail,
       subject: params.subject.startsWith('Re: ') ? params.subject : `Re: ${params.subject}`,
       body: generated.reply,
       threadId,
+      senderName: agent.name,
+      businessName: business.name,
     });
 
     const newThread: EmailThread = {
@@ -932,22 +939,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           3
         );
 
-        // 3. Response Generation with Gemini 3.8 Flash
+        // 3. Response Generation with Gemini 3.8 Flash (Situation-Aware & Web-Grounded)
         const generated = await generateAgentEmailReply({
           subject: item.subject,
           body: item.body,
           customerName: item.fromName,
+          businessName: business.name,
           agentConfig: agent,
           retrievedChunks,
           intent: classification.intent,
+          enableWebSearch: true,
         });
 
-        // 4. Send Email via Gmail API (Immediate Autopilot Reply)
+        // 4. Send Email via Gmail API (Immediate Autopilot Reply - Dual Plain/HTML Spam-Safe)
         const sendRes = await GmailService.sendEmail({
           to: item.from,
           subject: item.subject.startsWith('Re: ') ? item.subject : `Re: ${item.subject}`,
           body: generated.reply,
           threadId: item.threadId,
+          inReplyTo: item.id,
+          senderName: agent.name,
+          businessName: business.name,
         });
 
         // 5. Mark as read in Gmail so we never process again
@@ -1061,6 +1073,151 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => clearInterval(timer);
   }, [isAutoResponderActive, agent.autoReplyEnabled, gmailAccount.email, knowledge, agent, business]);
+
+  // Website Crawler & Content Importer
+  const importWebsiteData = async (targetUrl: string): Promise<{ success: boolean; itemsCount: number; data: ExtractedWebsiteData }> => {
+    try {
+      const data = await WebsiteCrawlerService.crawlWebsite(targetUrl);
+      const newItems: KnowledgeItem[] = [];
+
+      // 1. Overview knowledge item
+      const overviewItem: KnowledgeItem = {
+        id: `site_overview_${Date.now()}`,
+        businessId: business.id,
+        title: `[Website Overview] ${data.title}`,
+        category: 'Company Information',
+        content: `Website URL: ${data.url}\nDomain: ${data.domain}\nPage Title: ${data.title}\nDescription: ${data.description}\n\nMain Content:\n${data.mainText}`,
+        sourceUrl: data.url,
+        status: 'READY',
+        isEnabled: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      newItems.push(overviewItem);
+
+      // 2. Services / Products item
+      if (data.services.length > 0) {
+        const servicesItem: KnowledgeItem = {
+          id: `site_services_${Date.now()}`,
+          businessId: business.id,
+          title: `[Website Services] Core Offerings for ${data.domain}`,
+          category: 'Services',
+          content: `Key Services & Topics extracted from ${data.url}:\n- ${data.services.join('\n- ')}`,
+          sourceUrl: data.url,
+          status: 'READY',
+          isEnabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        newItems.push(servicesItem);
+      }
+
+      // 3. Contact information item
+      if (data.contactInfo.emails.length > 0 || data.contactInfo.phones.length > 0) {
+        const contactItem: KnowledgeItem = {
+          id: `site_contact_${Date.now()}`,
+          businessId: business.id,
+          title: `[Website Contact] Official Contact & Support Details`,
+          category: 'Contact Information',
+          content: `Official Contact Info for ${data.domain}:\nEmails: ${data.contactInfo.emails.join(', ') || 'N/A'}\nPhones: ${data.contactInfo.phones.join(', ') || 'N/A'}\nWebsite: ${data.url}`,
+          sourceUrl: data.url,
+          status: 'READY',
+          isEnabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        newItems.push(contactItem);
+      }
+
+      // 4. Media & visual assets catalog item
+      if (data.images.length > 0) {
+        const mediaItem: KnowledgeItem = {
+          id: `site_media_${Date.now()}`,
+          businessId: business.id,
+          title: `[Website Visuals] Media Assets & Images for ${data.domain}`,
+          category: 'Products',
+          content: `Extracted visual assets from ${data.url}:\n${data.images.map(img => `Image: ${img.alt} (URL: ${img.src})`).join('\n')}`,
+          sourceUrl: data.url,
+          extractedImages: data.images.map(img => img.src),
+          status: 'READY',
+          isEnabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        newItems.push(mediaItem);
+      }
+
+      // Save to state and firestore
+      setKnowledge(prev => [...newItems, ...prev]);
+      for (const item of newItems) {
+        FirestoreSyncService.saveKnowledgeItem(business.id, item);
+      }
+
+      addToast({
+        type: 'success',
+        title: 'Website Data Imported ✓',
+        message: `Successfully crawled ${data.domain}: extracted ${newItems.length} knowledge sets & ${data.images.length} images.`,
+      });
+
+      return { success: true, itemsCount: newItems.length, data };
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Crawl Failed',
+        message: err.message || 'Unable to import website data.',
+      });
+      throw err;
+    }
+  };
+
+  // Manual File Upload & Parser (TXT, MD, JSON, CSV, PDF, DOCX)
+  const uploadKnowledgeFile = async (
+    file: File,
+    category: KnowledgeCategory = 'Company Information'
+  ): Promise<{ success: boolean; filename: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const textContent = (e.target?.result as string) || '';
+        const newItem: KnowledgeItem = {
+          id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          businessId: business.id,
+          title: file.name.replace(/\.[^/.]+$/, ''),
+          category,
+          content: textContent || `Uploaded file document: ${file.name}`,
+          sourceFileName: file.name,
+          sourceFileType: file.type || file.name.split('.').pop()?.toUpperCase() || 'DOCUMENT',
+          sourceFileSize: `${(file.size / 1024).toFixed(1)} KB`,
+          status: 'READY',
+          isEnabled: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        setKnowledge(prev => [newItem, ...prev]);
+        FirestoreSyncService.saveKnowledgeItem(business.id, newItem);
+
+        addToast({
+          type: 'success',
+          title: 'File Uploaded & Indexed ✓',
+          message: `"${file.name}" was parsed and added to your active knowledge base.`,
+        });
+
+        resolve({ success: true, filename: file.name });
+      };
+
+      reader.onerror = (err) => {
+        addToast({
+          type: 'error',
+          title: 'Upload Failed',
+          message: 'Could not read file contents.',
+        });
+        reject(err);
+      };
+
+      reader.readAsText(file);
+    });
+  };
 
   // Save all setup data and knowledge in one unified operation
   const saveAllSetupData = (data: {
@@ -1245,6 +1402,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncGmailInbox,
         simulateIncomingEmail,
         testSendLiveEmail,
+        importWebsiteData,
+        uploadKnowledgeFile,
         applyBusinessTemplate,
         saveAllSetupData,
         addToast,
