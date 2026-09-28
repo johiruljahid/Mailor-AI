@@ -177,6 +177,7 @@ export async function generateAgentEmailReply(params: {
   retrievedChunks: RetrievedChunk[];
   intent: EmailIntent;
   enableWebSearch?: boolean;
+  meetingBookingInfo?: { status: 'BOOKED'; dateFormatted: string; meetUrl?: string; eventLink?: string } | { status: 'SUGGEST_SLOTS'; availableSlots: string[] };
 }): Promise<{
   reply: string;
   decision: 'AUTO_REPLY' | 'NEEDS_REVIEW' | 'ESCALATE_HUMAN';
@@ -191,6 +192,7 @@ export async function generateAgentEmailReply(params: {
     retrievedChunks,
     intent,
     enableWebSearch = true,
+    meetingBookingInfo,
   } = params;
 
   // 1. Try server-side Gemini generation first (uses server GEMINI_API_KEY with Google Search Grounding)
@@ -230,19 +232,26 @@ export async function generateAgentEmailReply(params: {
           ? 'Provide a concise bilingual response in warm Bangla (বাংলা) followed by English.'
           : 'Detect the language of the incoming message. If the customer wrote in Bangla (or Banglish), reply in natural polite Bangla. If in English, reply in natural professional English.';
 
+      const meetingInstructions = meetingBookingInfo?.status === 'BOOKED'
+        ? `\n\nOFFICIAL GOOGLE CALENDAR APPOINTMENT CONFIRMATION:\n- Meeting has been automatically booked on Google Calendar for: ${meetingBookingInfo.dateFormatted}\n- Google Meet Link: ${meetingBookingInfo.meetUrl || 'meet.google.com'}\nInclude a clear, polite confirmation in your reply confirming this meeting date/time, provide the Google Meet link, and note that a Google Calendar invite has been sent to their email.\n`
+        : meetingBookingInfo?.status === 'SUGGEST_SLOTS' && meetingBookingInfo.availableSlots?.length > 0
+        ? `\n\nCALENDAR AVAILABILITY & SUGGESTED SLOTS:\n- The client requested a meeting or consultation. Based on our real-time Google Calendar availability, present the following open time slots in clean bullet points:\n${meetingBookingInfo.availableSlots.map((s: string) => `  • ${s}`).join('\n')}\nPolitely ask which of these times works best for them.\n`
+        : '';
+
       const prompt = `You are ${agentConfig.name}, a genuine human employee and support lead at ${businessName}.
 Tone: ${agentConfig.tone}.
 Language: ${languageInstruction}
 
-CRITICAL ACCURACY & HUMAN AUTHENTICITY RULES:
+CRITICAL ACCURACY, HUMAN AUTHENTICITY & SPECIFICITY RULES:
 1. Speak as a genuine, warm, and professional human colleague writing back from their email desk.
 2. The customer must NEVER suspect this is an AI, bot, virtual assistant, or automated script.
 3. NEVER output raw metadata, prefixes, or labels like "Page Title:", "Description:", "Website URL:", or raw scraped text. Always synthesize the facts into fluent, human-written sentences!
-4. ANSWER EXACTLY WHAT THE CLIENT ASKED:
-   - If the client asked: "what is your business name and what type of service ?", answer directly:
-     State our business name clearly (${businessName}) and summarize our core services clearly, highlighting what we do for clients.
-   - For short single questions (e.g. "What is your name?", "Where are you located?", "What are your business hours?"), reply directly in 1-2 friendly human sentences.
-   - For detailed questions, answer point by point with clean paragraph breaks.
+4. ANSWER EXACTLY WHAT THE CLIENT ASKED - POINT BY POINT:
+   - If the client asks about pricing, service charges, cost, or packages:
+     Provide a clear, structured bullet-point breakdown (•) listing each relevant service, package name, exact price, and turnaround time from the verified knowledge base.
+   - For multi-part inquiries:
+     Address each question in a structured, readable manner using clean bullet points (•) and natural paragraph breaks.
+   - For short single questions (e.g. "What is your name?", "Where are you located?"), reply directly in 1-2 friendly human sentences.${meetingInstructions}
 5. NO ROBOTIC CLICHÉS (Never say "As an AI...", "I hope this email finds you well!", "Your inquiry has been logged").
 6. Ground your answers strictly on the company knowledge below.
 7. Sign off naturally:
@@ -355,13 +364,31 @@ Generate the final, complete email reply text:`;
     }
   }
 
-  // Scenario C: Pricing & packages
-  if (intent === 'Pricing' || cleanBodyLower.includes('pricing') || cleanBodyLower.includes('how much') || cleanBodyLower.includes('cost')) {
-    const priceChunk = retrievedChunks.find(c => c.category === 'Pricing' || c.title.toLowerCase().includes('pricing'));
-    const priceDetails = priceChunk
-      ? cleanChunkText(priceChunk.snippet)
-      : 'Our standard Starter packages begin at $250, and custom full-stack software solutions are tailored to your exact scope with transparent milestone pricing.';
-    const reply = `Hi ${customerName !== 'there' ? customerName : 'there'},\n\nRegarding our pricing and deliverables at ${actualBusinessName}:\n\n${priceDetails}\n\nIf you have a specific budget or set of features in mind, feel free to reply directly to this email and I will be happy to prepare a tailored estimate for you!\n\nBest regards,\n${agentConfig.name}\n${actualBusinessName}`;
+  // Meeting booking handler in fallback
+  let meetingBlock = '';
+  if (meetingBookingInfo?.status === 'BOOKED') {
+    meetingBlock = `\n\n✓ Meeting Confirmed:\n• Date & Time: ${meetingBookingInfo.dateFormatted}\n• Google Meet Link: ${meetingBookingInfo.meetUrl || 'https://meet.google.com'}\n• A Google Calendar invitation has been sent to your email.`;
+  } else if (meetingBookingInfo?.status === 'SUGGEST_SLOTS' && meetingBookingInfo.availableSlots?.length > 0) {
+    meetingBlock = `\n\nRegarding our availability for a meeting or consultation, here are our next open Google Calendar slots:\n${meetingBookingInfo.availableSlots.map(s => `• ${s}`).join('\n')}\n\nPlease reply with the time that works best for you and I will reserve it immediately!`;
+  }
+
+  // Scenario C: Pricing & packages (Itemized in clear bullet points)
+  if (intent === 'Pricing' || cleanBodyLower.includes('pricing') || cleanBodyLower.includes('how much') || cleanBodyLower.includes('cost') || cleanBodyLower.includes('charge') || cleanBodyLower.includes('koto')) {
+    const priceChunk = retrievedChunks.find(c => c.category === 'Pricing' || c.title.toLowerCase().includes('pricing') || c.category === 'Services');
+    let priceDetails = '';
+    if (priceChunk) {
+      const cleaned = cleanChunkText(priceChunk.snippet || priceChunk.fullContent);
+      // Format lines into clear bullet points if not already
+      priceDetails = cleaned
+        .split('\n')
+        .filter(l => l.trim().length > 0)
+        .map(l => (l.trim().startsWith('•') || l.trim().startsWith('-') ? l.trim() : `• ${l.trim()}`))
+        .join('\n');
+    } else {
+      priceDetails = `• Starter Package: $250 - $499 (Turnaround: 3-5 days)\n• Professional Custom Solution: $999 - $1,499 (Turnaround: 7-10 days)\n• Enterprise & Ongoing Retainer: Tailored to scope with transparent milestone delivery.`;
+    }
+
+    const reply = `Hi ${customerName !== 'there' ? customerName : 'there'},\n\nThank you for asking about our service charges and rates at ${actualBusinessName}. Here is our current pricing breakdown:\n\n${priceDetails}${meetingBlock}\n\nIf you have a specific project scope or budget in mind, please feel free to share your requirements and I will prepare a customized quote for you!\n\nBest regards,\n${agentConfig.name}\n${actualBusinessName}`;
     return { reply, decision: 'AUTO_REPLY' };
   }
 
@@ -402,17 +429,38 @@ export async function runAgentTestSimulation(
   subject: string,
   body: string,
   agentConfig: EmailAgentConfig,
-  knowledgeList: RetrievedChunk[]
+  knowledgeList: RetrievedChunk[],
+  businessName: string = 'Nexus Digital Labs'
 ): Promise<TestAgentAnalysis> {
   const startTime = Date.now();
   const classification = await classifyEmailIntent(subject, body);
+
+  let meetingBookingInfo: any = undefined;
+  try {
+    const { GoogleCalendarService } = await import('../services/googleCalendarService');
+    const meetingRes = await GoogleCalendarService.processMeetingInquiry({
+      subject,
+      body,
+      clientEmail: 'inquirer@example.com',
+      clientName: 'Alex Jordan',
+      businessName,
+    });
+    if (meetingRes.action === 'BOOKED' || meetingRes.action === 'SUGGEST_SLOTS') {
+      meetingBookingInfo = meetingRes.meetingBookingInfo;
+    }
+  } catch (err) {
+    console.warn('Simulation meeting detection notice:', err);
+  }
+
   const generation = await generateAgentEmailReply({
     subject,
     body,
     customerName: 'Alex Jordan',
+    businessName,
     agentConfig,
     retrievedChunks: knowledgeList,
     intent: classification.intent,
+    meetingBookingInfo,
   });
 
   const latencyMs = Date.now() - startTime;

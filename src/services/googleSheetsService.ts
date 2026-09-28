@@ -14,6 +14,7 @@ export interface EmailReportRow {
   inquirySummary: string;
   replySummary: string;
   intent: string;
+  meetingBooked?: string;
   status: 'DELIVERED' | 'FAILED' | 'SPAM_FILTERED';
   responseTime?: string;
 }
@@ -75,7 +76,7 @@ export class GoogleSheetsService {
                 gridProperties: {
                   frozenRowCount: 1,
                   rowCount: 1000,
-                  columnCount: 10,
+                  columnCount: 11,
                 },
               },
             },
@@ -94,7 +95,7 @@ export class GoogleSheetsService {
 
       // Set up professional column headers
       const headers = [
-        ['Date & Time', 'Date', 'Time', 'Client Name', 'Client Email', 'Subject', 'Client Message Snippet', 'AI Reply Summary', 'Intent / Topic', 'Delivery Status'],
+        ['Date & Time', 'Date', 'Time', 'Client Name', 'Client Email', 'Subject', 'Client Message Snippet', 'AI Reply Summary', 'Intent / Topic', 'Meeting Scheduled', 'Delivery Status'],
       ];
 
       await this.appendRowValues(spreadsheetId, headers, token);
@@ -170,6 +171,7 @@ export class GoogleSheetsService {
         (row.inquirySummary || '').slice(0, 300),
         (row.replySummary || '').slice(0, 400),
         row.intent || 'General inquiry',
+        row.meetingBooked || 'No meeting requested',
         row.status === 'DELIVERED' ? 'DELIVERED ✓' : row.status,
       ],
     ];

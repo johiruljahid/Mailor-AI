@@ -11,6 +11,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { GoogleConnectModal } from '../auth/GoogleConnectModal';
+import { GoogleCalendarModal } from '../calendar/GoogleCalendarModal';
 
 export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {
@@ -20,6 +21,8 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     logout,
     isGoogleConnectModalOpen,
     setIsGoogleConnectModalOpen,
+    isCalendarModalOpen,
+    setIsCalendarModalOpen,
     autoScanCountdown,
     isAutoResponderActive,
   } = useApp();
@@ -120,6 +123,14 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         <GoogleConnectModal
           isOpen={isGoogleConnectModalOpen}
           onClose={() => setIsGoogleConnectModalOpen(false)}
+        />
+      )}
+
+      {/* Google Calendar Hub Modal */}
+      {isCalendarModalOpen && (
+        <GoogleCalendarModal
+          isOpen={isCalendarModalOpen}
+          onClose={() => setIsCalendarModalOpen(false)}
         />
       )}
     </div>

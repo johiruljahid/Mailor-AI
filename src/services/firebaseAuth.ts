@@ -15,6 +15,7 @@ import { GmailService } from './gmailService';
 import { GoogleDriveService } from './googleDriveService';
 import { GoogleSheetsService } from './googleSheetsService';
 import { GoogleDocsService } from './googleDocsService';
+import { GoogleCalendarService } from './googleCalendarService';
 
 // Use provisioned Firebase project configuration
 const firebaseConfig = {
@@ -60,6 +61,10 @@ googleProvider.addScope('https://www.googleapis.com/auth/spreadsheets.readonly')
 googleProvider.addScope('https://www.googleapis.com/auth/documents');
 googleProvider.addScope('https://www.googleapis.com/auth/documents.readonly');
 
+// Google Calendar scopes for scheduling client appointments & availability checking
+googleProvider.addScope('https://www.googleapis.com/auth/calendar');
+googleProvider.addScope('https://www.googleapis.com/auth/calendar.events');
+
 // Force Google consent screen to ensure permissions are explicitly granted
 googleProvider.setCustomParameters({
   prompt: 'consent select_account',
@@ -75,6 +80,7 @@ try {
     GoogleDriveService.setAccessToken(cachedAccessToken);
     GoogleSheetsService.setAccessToken(cachedAccessToken);
     GoogleDocsService.setAccessToken(cachedAccessToken);
+    GoogleCalendarService.setAccessToken(cachedAccessToken);
   }
 } catch {}
 
@@ -95,6 +101,7 @@ export const initAuth = (
         GoogleDriveService.setAccessToken(activeToken);
         GoogleSheetsService.setAccessToken(activeToken);
         GoogleDocsService.setAccessToken(activeToken);
+        GoogleCalendarService.setAccessToken(activeToken);
       }
       if (onAuthSuccess) onAuthSuccess(user, activeToken);
     } else {
@@ -106,6 +113,7 @@ export const initAuth = (
       GoogleDriveService.setAccessToken(null);
       GoogleSheetsService.setAccessToken(null);
       GoogleDocsService.setAccessToken(null);
+      GoogleCalendarService.setAccessToken(null);
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -131,6 +139,7 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
       GoogleDriveService.setAccessToken(token);
       GoogleSheetsService.setAccessToken(token);
       GoogleDocsService.setAccessToken(token);
+      GoogleCalendarService.setAccessToken(token);
     }
 
     return { user: result.user, accessToken: token || cachedAccessToken || '' };
@@ -155,12 +164,14 @@ export const setCachedAccessToken = (token: string | null) => {
       GoogleDriveService.setAccessToken(token);
       GoogleSheetsService.setAccessToken(token);
       GoogleDocsService.setAccessToken(token);
+      GoogleCalendarService.setAccessToken(token);
     } else {
       sessionStorage.removeItem('mailora_oauth_token');
       GmailService.setAccessToken(null);
       GoogleDriveService.setAccessToken(null);
       GoogleSheetsService.setAccessToken(null);
       GoogleDocsService.setAccessToken(null);
+      GoogleCalendarService.setAccessToken(null);
     }
   } catch {}
 };

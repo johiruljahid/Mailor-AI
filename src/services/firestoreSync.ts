@@ -208,4 +208,65 @@ export class FirestoreSyncService {
       return null;
     }
   }
+
+  /**
+   * Save a booked Google Calendar meeting
+   */
+  static async saveCalendarBooking(businessId: string, booking: any): Promise<boolean> {
+    if (!db) return false;
+    try {
+      const ref = doc(db, 'businesses', businessId, 'calendar', booking.id);
+      await setDoc(ref, booking, { merge: true });
+      return true;
+    } catch (err) {
+      console.warn('Firestore saveCalendarBooking notice:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Fetch all calendar bookings for the business
+   */
+  static async fetchCalendarBookings(businessId: string): Promise<any[]> {
+    if (!db) return [];
+    try {
+      const colRef = collection(db, 'businesses', businessId, 'calendar');
+      const snapshot = await getDocs(colRef);
+      return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch (err) {
+      console.warn('Firestore fetchCalendarBookings notice:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Save Google Calendar configuration
+   */
+  static async saveCalendarConfig(businessId: string, config: any): Promise<boolean> {
+    if (!db) return false;
+    try {
+      const ref = doc(db, 'businesses', businessId, 'calendar_config', 'default');
+      await setDoc(ref, config, { merge: true });
+      return true;
+    } catch (err) {
+      console.warn('Firestore saveCalendarConfig notice:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Fetch Google Calendar configuration
+   */
+  static async fetchCalendarConfig(businessId: string): Promise<any | null> {
+    if (!db) return null;
+    try {
+      const ref = doc(db, 'businesses', businessId, 'calendar_config', 'default');
+      const snapshot = await getDoc(ref);
+      if (!snapshot.exists()) return null;
+      return snapshot.data();
+    } catch (err) {
+      console.warn('Firestore fetchCalendarConfig notice:', err);
+      return null;
+    }
+  }
 }

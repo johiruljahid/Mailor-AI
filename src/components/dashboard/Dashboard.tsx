@@ -36,6 +36,8 @@ import {
   Download,
   Link as LinkIcon,
   Info,
+  Calendar as CalendarIcon,
+  Video,
 } from 'lucide-react';
 import { KnowledgeCategory, AgentTone, ReplyLanguage } from '../../types';
 import { ExtractedWebsiteData } from '../../services/websiteCrawlerService';
@@ -70,6 +72,10 @@ export const Dashboard: React.FC = () => {
     importGoogleDoc,
     createGoogleDocKnowledge,
     connectGoogleDrive,
+    calendarBookings,
+    calendarConfig,
+    setCalendarConfig,
+    setIsCalendarModalOpen,
     addToast,
   } = useApp();
 
@@ -494,8 +500,8 @@ export const Dashboard: React.FC = () => {
         </div>
       )}
 
-      {/* TOP PROMINENT ROW: Google Workspace Autonomous Suite (Google Drive + Google Docs + Google Sheets) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* TOP PROMINENT ROW: Google Workspace Autonomous Suite (Google Drive + Google Docs + Google Sheets + Google Calendar) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
         {/* 1. Google Drive Cloud Knowledge Central Card */}
         <div className="rounded-3xl bg-gradient-to-br from-[#131109] via-[#0d1322] to-slate-950 border border-amber-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-amber-400/60 hover:-translate-y-1.5 transition-all duration-300">
           <div className="absolute top-0 right-0 w-40 h-40 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
@@ -820,6 +826,78 @@ export const Dashboard: React.FC = () => {
                 </button>
               </>
             )}
+          </div>
+        </div>
+
+        {/* 4. Google Calendar Autonomous Booking Hub Card */}
+        <div className="rounded-3xl bg-gradient-to-br from-[#0c0d22] via-[#0d1322] to-slate-950 border border-indigo-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-indigo-400/60 hover:-translate-y-1.5 transition-all duration-300">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div className="space-y-3 relative z-10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shadow-md group-hover:scale-105 transition-transform">
+                  <CalendarIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-extrabold text-white">Google Calendar</h3>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      Auto-Book
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">Availability Check & Meet Links</p>
+                </div>
+              </div>
+
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  calendarConfig.autoBookMeetings
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : 'bg-slate-800 text-slate-400 border-slate-700'
+                }`}
+              >
+                {calendarConfig.autoBookMeetings ? 'Auto-Pilot Active ✓' : 'Paused'}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Detects meeting requests in emails, verifies calendar availability, schedules appointments, and auto-generates Google Meet links.
+            </p>
+
+            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+              <div>
+                <span>Appointments:</span>
+                <strong className="text-white ml-1.5 font-mono">
+                  {calendarConfig.totalMeetingsBooked || calendarBookings.length} booked
+                </strong>
+              </div>
+              <div className="text-right">
+                <span className="text-indigo-400 font-semibold">
+                  {calendarConfig.defaultMeetingDurationMinutes || 30}m window
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
+            <button
+              onClick={() => setIsCalendarModalOpen(true)}
+              className="flex-1 py-2.5 px-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-extrabold text-xs shadow-lg shadow-indigo-600/25 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <CalendarIcon className="w-4 h-4" />
+              <span>Calendar Hub ↗</span>
+            </button>
+
+            <a
+              href="https://calendar.google.com"
+              target="_blank"
+              rel="noreferrer"
+              className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
+              title="Open Google Calendar"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
         </div>
       </div>

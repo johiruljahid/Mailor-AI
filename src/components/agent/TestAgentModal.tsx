@@ -24,6 +24,7 @@ export const TestAgentModal: React.FC = () => {
     isTestAgentOpen,
     setIsTestAgentOpen,
     agent,
+    business,
     knowledge,
     setCurrentView,
     testSendLiveEmail,
@@ -73,7 +74,7 @@ export const TestAgentModal: React.FC = () => {
 
     try {
       const retrieved = retrieveRelevantKnowledge(`${testSub} ${testBody}`, knowledge, 3);
-      const simulation = await runAgentTestSimulation(testSub, testBody, agent, retrieved);
+      const simulation = await runAgentTestSimulation(testSub, testBody, agent, retrieved, business.name);
       setResult(simulation);
     } catch (err: any) {
       addToast({

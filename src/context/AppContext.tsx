@@ -16,6 +16,8 @@ import {
   AgentTone,
   ReplyLanguage,
   GoogleSheetsConfig,
+  CalendarBooking,
+  GoogleCalendarConfig,
 } from '../types';
 import {
   INITIAL_USER,
@@ -35,6 +37,7 @@ import { GmailService } from '../services/gmailService';
 import { GoogleDriveService } from '../services/googleDriveService';
 import { GoogleSheetsService } from '../services/googleSheetsService';
 import { GoogleDocsService } from '../services/googleDocsService';
+import { GoogleCalendarService, AvailableSlot, CalendarEvent } from '../services/googleCalendarService';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { WebsiteCrawlerService, ExtractedWebsiteData } from '../services/websiteCrawlerService';
 import { setCachedAccessToken, getCachedAccessToken, initAuth, logoutUser, signInWithGoogle } from '../services/firebaseAuth';
@@ -92,6 +95,15 @@ interface AppContextType {
 
   // Google Drive Integration
   connectGoogleDrive: () => Promise<boolean>;
+
+  // Google Calendar Integration
+  calendarBookings: CalendarBooking[];
+  calendarConfig: GoogleCalendarConfig;
+  setCalendarConfig: React.Dispatch<React.SetStateAction<GoogleCalendarConfig>>;
+  bookCalendarMeeting: (params: { summary: string; description: string; startIso: string; endIso: string; clientEmail: string; clientName: string }) => Promise<{ success: boolean; meetUrl?: string; startFormatted?: string }>;
+  getAvailableMeetingSlots: (daysAhead?: number) => Promise<AvailableSlot[]>;
+  isCalendarModalOpen: boolean;
+  setIsCalendarModalOpen: (open: boolean) => void;
 
   // Data models
   user: UserProfile | null;
@@ -222,6 +234,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     autoSyncEnabled: true,
   });
 
+  // Google Calendar Integration State
+  const [calendarBookings, setCalendarBookings] = useState<CalendarBooking[]>([]);
+  const [calendarConfig, setCalendarConfig] = useState<GoogleCalendarConfig>({
+    isConnected: true,
+    autoBookMeetings: true,
+    defaultMeetingDurationMinutes: 30,
+    workingHoursStart: 10,
+    workingHoursEnd: 18,
+    totalMeetingsBooked: 0,
+  });
+  const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
+
   // Core state loaded with realistic defaults
   const [user, setUser] = useState<UserProfile | null>(INITIAL_USER);
   const [business, setBusiness] = useState<Business>(INITIAL_BUSINESS);
@@ -273,6 +297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           GmailService.setAccessToken(token);
           GoogleDriveService.setAccessToken(token);
           GoogleSheetsService.setAccessToken(token);
+          GoogleCalendarService.setAccessToken(token);
           setIsGoogleAuthenticated(!token.startsWith('demo_'));
         }
 
@@ -294,6 +319,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (localData.knowledge && localData.knowledge.length > 0) setKnowledge(localData.knowledge);
           if (localData.autoReplyLogs && localData.autoReplyLogs.length > 0) setAutoReplyLogs(localData.autoReplyLogs);
           if (localData.googleSheetsConfig) setGoogleSheetsConfig(localData.googleSheetsConfig);
+          if (localData.calendarBookings && localData.calendarBookings.length > 0) setCalendarBookings(localData.calendarBookings);
+          if (localData.calendarConfig) setCalendarConfig(localData.calendarConfig);
         }
 
         // 2. Ensure business workspace exists in Firestore with ownerUid
@@ -338,6 +365,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             saveUserLocalData(authUser.uid, { autoReplyLogs: savedLogs });
           }
         });
+        FirestoreSyncService.fetchCalendarBookings(userBizId).then(savedBookings => {
+          if (savedBookings && savedBookings.length > 0) {
+            setCalendarBookings(savedBookings);
+            saveUserLocalData(authUser.uid, { calendarBookings: savedBookings });
+          }
+        });
+        FirestoreSyncService.fetchCalendarConfig(userBizId).then(savedCalConfig => {
+          if (savedCalConfig) {
+            setCalendarConfig(savedCalConfig);
+            saveUserLocalData(authUser.uid, { calendarConfig: savedCalConfig });
+          }
+        });
       },
       () => {
         // Not authenticated
@@ -365,6 +404,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       GmailService.setAccessToken(token);
       GoogleDriveService.setAccessToken(token);
       GoogleSheetsService.setAccessToken(token);
+      GoogleCalendarService.setAccessToken(token);
       setIsGoogleAuthenticated(true);
     }
     setGmailAccount(prev => ({
@@ -638,6 +678,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { success: false, documentId: '', documentUrl: '' };
     }
+  };
+
+  // Google Calendar Integration Handlers
+  const bookCalendarMeeting = async (params: {
+    summary: string;
+    description: string;
+    startIso: string;
+    endIso: string;
+    clientEmail: string;
+    clientName: string;
+  }): Promise<{ success: boolean; meetUrl?: string; startFormatted?: string }> => {
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
+    const res = await GoogleCalendarService.bookMeetingEvent({
+      ...params,
+      accessToken: token || undefined,
+    });
+
+    if (res.success) {
+      const newBooking: CalendarBooking = {
+        id: `booking_${Date.now()}`,
+        eventId: res.eventId,
+        clientName: params.clientName,
+        clientEmail: params.clientEmail,
+        subject: params.summary,
+        startIso: params.startIso,
+        endIso: params.endIso,
+        startFormatted: res.startFormatted || 'Scheduled time',
+        endFormatted: res.endFormatted || '',
+        meetUrl: res.meetUrl,
+        calendarLink: res.eventLink,
+        status: 'CONFIRMED',
+        createdAt: new Date().toISOString(),
+      };
+
+      setCalendarBookings(prev => {
+        const next = [newBooking, ...prev];
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { calendarBookings: next });
+          FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, newBooking);
+        }
+        return next;
+      });
+
+      setCalendarConfig(prev => {
+        const next = { ...prev, totalMeetingsBooked: (prev.totalMeetingsBooked || 0) + 1 };
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { calendarConfig: next });
+          FirestoreSyncService.saveCalendarConfig(`biz_${user.uid}`, next);
+        }
+        return next;
+      });
+
+      addToast({
+        type: 'success',
+        title: 'Meeting Booked on Google Calendar ✓',
+        message: `Confirmed with ${params.clientName} for ${res.startFormatted}. Google Meet ready!`,
+      });
+
+      return { success: true, meetUrl: res.meetUrl, startFormatted: res.startFormatted };
+    }
+
+    return { success: false };
+  };
+
+  const getAvailableMeetingSlots = async (daysAhead: number = 3): Promise<AvailableSlot[]> => {
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
+    return await GoogleCalendarService.findNextAvailableSlots(
+      daysAhead,
+      calendarConfig.defaultMeetingDurationMinutes || 30,
+      token || undefined
+    );
   };
 
   const loginAsDemoUser = () => {
@@ -938,8 +1049,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const sender = emailData?.senderEmail || 'client@example.com';
     const senderName = emailData?.senderName || 'Prospective Client';
 
+    // 1. Google Calendar Autonomous Meeting Detection & Booking
+    let meetingBookingInfo: any = undefined;
+    let meetingReportSummary = 'N/A';
+
+    if (calendarConfig.autoBookMeetings) {
+      try {
+        const meetingRes = await GoogleCalendarService.processMeetingInquiry({
+          subject,
+          body,
+          clientEmail: sender,
+          clientName: senderName,
+          businessName: business.name,
+          durationMinutes: calendarConfig.defaultMeetingDurationMinutes || 30,
+        });
+
+        if (meetingRes.action === 'BOOKED' && meetingRes.calendarBooking) {
+          meetingBookingInfo = meetingRes.meetingBookingInfo;
+          meetingReportSummary = meetingRes.meetingReportSummary || 'Booked';
+
+          setCalendarBookings(prev => {
+            const next = [meetingRes.calendarBooking!, ...prev];
+            if (user?.uid) {
+              saveUserLocalData(user.uid, { calendarBookings: next });
+              FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, meetingRes.calendarBooking!);
+            }
+            return next;
+          });
+
+          setCalendarConfig(prev => {
+            const next = { ...prev, totalMeetingsBooked: (prev.totalMeetingsBooked || 0) + 1 };
+            if (user?.uid) {
+              saveUserLocalData(user.uid, { calendarConfig: next });
+              FirestoreSyncService.saveCalendarConfig(`biz_${user.uid}`, next);
+            }
+            return next;
+          });
+        } else if (meetingRes.action === 'SUGGEST_SLOTS') {
+          meetingBookingInfo = meetingRes.meetingBookingInfo;
+          meetingReportSummary = meetingRes.meetingReportSummary || 'Slots Suggested';
+        }
+      } catch (calErr) {
+        console.warn('Calendar meeting processing notice in simulate:', calErr);
+      }
+    }
+
     const classification = await classifyEmailIntent(subject, body, sender);
-    const retrievedChunks = retrieveRelevantKnowledge(`${subject} ${body}`, knowledge, 3);
+    const retrievedChunks = retrieveRelevantKnowledge(`${subject} ${body}`, knowledge, 4);
     const generated = await generateAgentEmailReply({
       subject,
       body,
@@ -949,6 +1105,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       retrievedChunks,
       intent: classification.intent,
       enableWebSearch: true,
+      meetingBookingInfo,
     });
 
     const newThread: EmailThread = {
@@ -999,10 +1156,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     FirestoreSyncService.saveThread(business.id, newThread);
 
+    // Auto-log to Google Sheets if connected
+    if (googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetId) {
+      const token = GmailService.getAccessToken() || getCachedAccessToken();
+      GoogleSheetsService.logEmailReply(googleSheetsConfig.spreadsheetId, {
+        timestamp: new Date().toISOString(),
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        clientName: senderName,
+        clientEmail: sender,
+        subject,
+        inquirySummary: body.slice(0, 250),
+        replySummary: generated.reply.slice(0, 350),
+        intent: classification.intent,
+        meetingBooked: meetingReportSummary,
+        status: 'DELIVERED',
+      }, token || undefined).catch(e => console.warn('Google Sheet log notice:', e));
+    }
+
     addToast({
       type: 'success',
-      title: 'Incoming Email Handled ✓',
-      message: `Auto-replied to "${subject}" from ${senderName}`,
+      title: meetingBookingInfo?.status === 'BOOKED' ? 'Meeting Booked & Replied ✓' : 'Incoming Email Handled ✓',
+      message: meetingBookingInfo?.status === 'BOOKED'
+        ? `Appointment booked on Google Calendar & replied to "${subject}"`
+        : `Auto-replied to "${subject}" from ${senderName}`,
     });
   };
 
@@ -1013,6 +1190,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     subject: string;
     body: string;
   }): Promise<{ success: boolean; reply: string }> => {
+    // 1. Google Calendar Autonomous Meeting Detection & Booking
+    let meetingBookingInfo: any = undefined;
+    let meetingReportSummary = 'N/A';
+
+    if (calendarConfig.autoBookMeetings) {
+      try {
+        const meetingRes = await GoogleCalendarService.processMeetingInquiry({
+          subject: params.subject,
+          body: params.body,
+          clientEmail: params.toEmail,
+          clientName: params.customerName || 'Valued Customer',
+          businessName: business.name,
+          durationMinutes: calendarConfig.defaultMeetingDurationMinutes || 30,
+        });
+
+        if (meetingRes.action === 'BOOKED' && meetingRes.calendarBooking) {
+          meetingBookingInfo = meetingRes.meetingBookingInfo;
+          meetingReportSummary = meetingRes.meetingReportSummary || 'Booked';
+
+          setCalendarBookings(prev => {
+            const next = [meetingRes.calendarBooking!, ...prev];
+            if (user?.uid) {
+              saveUserLocalData(user.uid, { calendarBookings: next });
+              FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, meetingRes.calendarBooking!);
+            }
+            return next;
+          });
+
+          setCalendarConfig(prev => {
+            const next = { ...prev, totalMeetingsBooked: (prev.totalMeetingsBooked || 0) + 1 };
+            if (user?.uid) {
+              saveUserLocalData(user.uid, { calendarConfig: next });
+              FirestoreSyncService.saveCalendarConfig(`biz_${user.uid}`, next);
+            }
+            return next;
+          });
+        } else if (meetingRes.action === 'SUGGEST_SLOTS') {
+          meetingBookingInfo = meetingRes.meetingBookingInfo;
+          meetingReportSummary = meetingRes.meetingReportSummary || 'Slots Suggested';
+        }
+      } catch (calErr) {
+        console.warn('Calendar meeting processing notice in live test send:', calErr);
+      }
+    }
+
     const classification = await classifyEmailIntent(params.subject, params.body, params.toEmail);
     const retrievedChunks = retrieveRelevantKnowledge(`${params.subject} ${params.body}`, knowledge, 4);
 
@@ -1025,6 +1247,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       retrievedChunks,
       intent: classification.intent,
       enableWebSearch: true,
+      meetingBookingInfo,
     });
 
     const token = GmailService.getAccessToken() || getCachedAccessToken();
@@ -1048,6 +1271,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         inquirySummary: params.body.slice(0, 250),
         replySummary: generated.reply.slice(0, 350),
         intent: classification.intent,
+        meetingBooked: meetingReportSummary,
         status: 'DELIVERED',
       }, token || undefined).catch(e => console.warn('Google Sheet append notice:', e));
 
@@ -1191,14 +1415,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           continue;
         }
 
-        // 2. Knowledge Retrieval (RAG) across Google Drive, Website, and Manual entries
+        // 2. Calendar Meeting Detection & Auto-Appointment Booking
+        let meetingBookingInfo: any = undefined;
+        let meetingReportSummary = 'N/A';
+
+        if (calendarConfig.autoBookMeetings) {
+          try {
+            const meetingRes = await GoogleCalendarService.processMeetingInquiry({
+              subject: item.subject,
+              body: item.body,
+              clientEmail: item.from,
+              clientName: item.fromName,
+              businessName: business.name,
+              durationMinutes: calendarConfig.defaultMeetingDurationMinutes || 30,
+              accessToken: token,
+            });
+
+            if (meetingRes.action === 'BOOKED' && meetingRes.calendarBooking) {
+              meetingBookingInfo = meetingRes.meetingBookingInfo;
+              meetingReportSummary = meetingRes.meetingReportSummary || 'Booked';
+
+              setCalendarBookings(prev => {
+                const next = [meetingRes.calendarBooking!, ...prev];
+                if (user?.uid) {
+                  saveUserLocalData(user.uid, { calendarBookings: next });
+                  FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, meetingRes.calendarBooking!);
+                }
+                return next;
+              });
+
+              setCalendarConfig(prev => {
+                const next = { ...prev, totalMeetingsBooked: (prev.totalMeetingsBooked || 0) + 1 };
+                if (user?.uid) {
+                  saveUserLocalData(user.uid, { calendarConfig: next });
+                  FirestoreSyncService.saveCalendarConfig(`biz_${user.uid}`, next);
+                }
+                return next;
+              });
+            } else if (meetingRes.action === 'SUGGEST_SLOTS') {
+              meetingBookingInfo = meetingRes.meetingBookingInfo;
+              meetingReportSummary = meetingRes.meetingReportSummary || 'Slots Suggested';
+            }
+          } catch (calErr) {
+            console.warn('Calendar meeting processing notice in background poll:', calErr);
+          }
+        }
+
+        // 3. Knowledge Retrieval (RAG) across Google Drive, Website, and Manual entries
         const retrievedChunks = retrieveRelevantKnowledge(
           `${item.subject} ${item.body}`,
           knowledge,
           4
         );
 
-        // 3. Response Generation with Gemini 3.8 Flash (Situation-Aware & Web-Grounded)
+        // 4. Response Generation with Gemini 3.8 Flash (Situation-Aware & Web-Grounded)
         const generated = await generateAgentEmailReply({
           subject: item.subject,
           body: item.body,
@@ -1208,9 +1478,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           retrievedChunks,
           intent: classification.intent,
           enableWebSearch: true,
+          meetingBookingInfo,
         });
 
-        // 4. Send Email via Gmail API (Immediate Autopilot Reply - Dual Plain/HTML Spam-Safe)
+        // 5. Send Email via Gmail API (Immediate Autopilot Reply - Dual Plain/HTML Spam-Safe)
         try {
           const sendRes = await GmailService.sendEmail({
             to: item.from,
@@ -1261,6 +1532,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               inquirySummary: item.body.slice(0, 200),
               replySummary: generated.reply.slice(0, 300),
               intent: classification.intent,
+              meetingBooked: meetingReportSummary,
               status: 'DELIVERED',
             }, token).catch(e => console.warn('Google Sheet log error:', e));
 
@@ -1768,6 +2040,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         importGoogleDoc,
         createGoogleDocKnowledge,
         connectGoogleDrive,
+        calendarBookings,
+        calendarConfig,
+        setCalendarConfig,
+        bookCalendarMeeting,
+        getAvailableMeetingSlots,
+        isCalendarModalOpen,
+        setIsCalendarModalOpen,
         user,
         business,
         agent,

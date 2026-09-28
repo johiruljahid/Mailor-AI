@@ -66,6 +66,10 @@ service cloud.firestore {
         allow read, write: if hasBusinessAccess(businessId);
       }
 
+      match /calendar/{calId} {
+        allow read, write: if hasBusinessAccess(businessId);
+      }
+
       match /logs/{logId} {
         allow read, write: if hasBusinessAccess(businessId);
       }

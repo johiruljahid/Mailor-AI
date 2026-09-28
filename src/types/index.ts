@@ -238,3 +238,28 @@ export interface GoogleSheetsConfig {
   autoSyncEnabled: boolean;
 }
 
+export interface CalendarBooking {
+  id: string;
+  eventId?: string;
+  clientName: string;
+  clientEmail: string;
+  subject: string;
+  startIso: string;
+  endIso: string;
+  startFormatted: string;
+  endFormatted: string;
+  meetUrl?: string;
+  calendarLink?: string;
+  status: 'CONFIRMED' | 'PROPOSED' | 'CANCELLED';
+  createdAt: string;
+}
+
+export interface GoogleCalendarConfig {
+  isConnected: boolean;
+  autoBookMeetings: boolean;
+  defaultMeetingDurationMinutes: number;
+  workingHoursStart: number;
+  workingHoursEnd: number;
+  totalMeetingsBooked: number;
+}
+
