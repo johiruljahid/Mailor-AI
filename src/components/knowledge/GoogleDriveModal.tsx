@@ -34,6 +34,8 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({ isOpen, onCl
     gmailAccount,
     isGoogleAuthenticated,
     connectGoogleAccount,
+    importGoogleDoc,
+    createGoogleDocKnowledge,
   } = useApp();
 
   const [files, setFiles] = useState<GoogleDriveFile[]>([]);
@@ -47,6 +49,8 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({ isOpen, onCl
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [isExportingBackup, setIsExportingBackup] = useState<boolean>(false);
   const [filterType, setFilterType] = useState<string>('ALL');
+  const [directDocUrl, setDirectDocUrl] = useState<string>('');
+  const [isDirectImporting, setIsDirectImporting] = useState<boolean>(false);
 
   const categories: KnowledgeCategory[] = [
     'Company Information',
@@ -319,6 +323,39 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({ isOpen, onCl
               title="Refresh Google Drive files"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-amber-400' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        {/* Quick Direct Doc Link Ingestion Bar */}
+        <div className="px-4 py-2.5 bg-slate-900/60 border-b border-slate-800/80 flex flex-col sm:flex-row items-center gap-2 text-xs">
+          <span className="text-slate-400 font-semibold shrink-0 flex items-center gap-1.5">
+            <FileText className="w-3.5 h-3.5 text-sky-400" />
+            <span>Direct Google Doc:</span>
+          </span>
+          <div className="flex-1 w-full flex gap-2">
+            <input
+              type="text"
+              value={directDocUrl}
+              onChange={e => setDirectDocUrl(e.target.value)}
+              placeholder="Paste Google Doc URL (https://docs.google.com/document/d/...)"
+              className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+            />
+            <button
+              onClick={async () => {
+                if (!directDocUrl) return;
+                setIsDirectImporting(true);
+                const res = await importGoogleDoc(directDocUrl, targetCategory);
+                setIsDirectImporting(false);
+                if (res.success) {
+                  setDirectDocUrl('');
+                  onClose();
+                }
+              }}
+              disabled={isDirectImporting || !directDocUrl}
+              className="px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-xs shrink-0 flex items-center gap-1"
+            >
+              <span>{isDirectImporting ? 'Ingesting...' : 'Import Doc'}</span>
             </button>
           </div>
         </div>

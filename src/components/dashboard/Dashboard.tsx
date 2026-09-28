@@ -67,6 +67,8 @@ export const Dashboard: React.FC = () => {
     connectGoogleSheet,
     disconnectGoogleSheet,
     exportActivityToCsv,
+    importGoogleDoc,
+    createGoogleDocKnowledge,
     connectGoogleDrive,
     addToast,
   } = useApp();
@@ -76,6 +78,12 @@ export const Dashboard: React.FC = () => {
   const [customSheetUrl, setCustomSheetUrl] = useState('');
   const [showCustomSheetInput, setShowCustomSheetInput] = useState(false);
   const [showUnverifiedGuide, setShowUnverifiedGuide] = useState(false);
+
+  // Google Docs state
+  const [docUrlInput, setDocUrlInput] = useState('');
+  const [isImportingDoc, setIsImportingDoc] = useState(false);
+  const [showDocUrlInput, setShowDocUrlInput] = useState(false);
+  const [isCreatingNewDoc, setIsCreatingNewDoc] = useState(false);
 
   // All Data Input State Tabs
   const [activeDataTab, setActiveDataTab] = useState<
@@ -486,26 +494,26 @@ export const Dashboard: React.FC = () => {
         </div>
       )}
 
-      {/* TOP PROMINENT ROW: Google Drive Cloud Central + Google Sheets Live Reports */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* TOP PROMINENT ROW: Google Workspace Autonomous Suite (Google Drive + Google Docs + Google Sheets) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* 1. Google Drive Cloud Knowledge Central Card */}
-        <div className="rounded-3xl bg-gradient-to-br from-[#121008] via-[#0d1322] to-slate-950 border border-amber-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-48 h-48 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
+        <div className="rounded-3xl bg-gradient-to-br from-[#131109] via-[#0d1322] to-slate-950 border border-amber-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-amber-400/60 hover:-translate-y-1.5 transition-all duration-300">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
 
           <div className="space-y-3 relative z-10">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-md">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-md group-hover:scale-105 transition-transform">
                   <HardDrive className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-extrabold text-white">Google Drive Cloud Knowledge Central</h3>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-extrabold text-white">Google Drive Cloud</h3>
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                      Cloud Central
+                      Cloud Sync
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400">Single Source of Truth for all Business Knowledge</p>
+                  <p className="text-[11px] text-slate-400">Knowledge Folder & Auto-Backups</p>
                 </div>
               </div>
 
@@ -516,69 +524,179 @@ export const Dashboard: React.FC = () => {
                     : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
                 }`}
               >
-                {isGoogleAuthenticated ? 'Drive Synced ✓' : 'Drive Access Needed'}
+                {isGoogleAuthenticated ? 'Drive Synced ✓' : 'Connect Needed'}
               </span>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              All website crawls, product catalogs, and documents are backed up into your private Google Drive folder (<code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">Mailora_AI_Knowledge_Base</code>). Mailora AI accesses your Google Drive to answer customer inquiries with 100% accuracy.
+              Auto-syncs website crawl notes, PDFs, and policies to your private Google Drive folder (<code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">Mailora_AI_Knowledge_Base</code>).
             </p>
 
             <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
               <div>
-                <span>Indexed Drive Docs:</span>
+                <span>Drive Files:</span>
                 <strong className="text-white ml-1.5 font-mono">
-                  {knowledge.filter(k => k.sourceFileType === 'GOOGLE_DRIVE' || k.sourceDriveFileId).length} files
+                  {knowledge.filter(k => k.sourceFileType === 'GOOGLE_DRIVE' || k.sourceDriveFileId).length} indexed
                 </strong>
               </div>
               <div className="text-right">
-                <span>Account:</span>
-                <span className="text-slate-300 ml-1 font-mono font-medium truncate max-w-[150px] inline-block align-bottom">
-                  {gmailAccount.email}
-                </span>
+                <span className="text-amber-400 font-semibold">100% Autopilot</span>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 pt-2 relative z-10">
+          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
             <button
               onClick={() => connectGoogleDrive()}
-              className="py-2.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2"
+              className="flex-1 py-2.5 px-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
             >
               <HardDrive className="w-4 h-4" />
-              <span>Connect & Sync Google Drive ↗</span>
+              <span>Browse Drive ↗</span>
             </button>
 
             <a
               href="https://drive.google.com/drive/my-drive"
               target="_blank"
               rel="noreferrer"
-              className="py-2.5 px-3.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1.5"
+              className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              <span>Open My Drive ↗</span>
+              <span>Drive ↗</span>
             </a>
           </div>
         </div>
 
-        {/* 2. Google Sheets Live Activity Reports Card */}
-        <div className="rounded-3xl bg-gradient-to-br from-[#071714] via-[#0d1322] to-slate-950 border border-emerald-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-48 h-48 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+        {/* 2. Google Docs Knowledge Suite Card */}
+        <div className="rounded-3xl bg-gradient-to-br from-[#08121f] via-[#0d1322] to-slate-950 border border-sky-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-sky-400/60 hover:-translate-y-1.5 transition-all duration-300">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-sky-500/10 rounded-full blur-2xl pointer-events-none" />
 
           <div className="space-y-3 relative z-10">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
+                <div className="w-10 h-10 rounded-2xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 shadow-md group-hover:scale-105 transition-transform">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-extrabold text-white">Google Docs Suite</h3>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                      Docs RAG
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">Import & Create AI Reference Docs</p>
+                </div>
+              </div>
+
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-sky-500/15 text-sky-400 border-sky-500/30">
+                Workspace Active ✓
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Read company handbook, service FAQs, or pricing directly from your Google Docs. Whenever you edit the Google Doc, Mailora AI replies with up-to-date facts.
+            </p>
+
+            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
+              <div>
+                <span>Google Docs Ingested:</span>
+                <strong className="text-white ml-1.5 font-mono">
+                  {knowledge.filter(k => k.sourceFileName?.includes('.gdoc') || k.sourceFileType === 'GOOGLE_DRIVE').length} docs
+                </strong>
+              </div>
+              <div className="text-right">
+                <span className="text-sky-400 font-semibold">Docs API Ready</span>
+              </div>
+            </div>
+
+            {showDocUrlInput && (
+              <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2 animate-in fade-in">
+                <label className="text-[11px] font-bold text-slate-300 block">
+                  Paste Google Doc URL or ID:
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={docUrlInput}
+                    onChange={e => setDocUrlInput(e.target.value)}
+                    placeholder="https://docs.google.com/document/d/..."
+                    className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-sky-500"
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!docUrlInput) return;
+                      setIsImportingDoc(true);
+                      await importGoogleDoc(docUrlInput);
+                      setIsImportingDoc(false);
+                      setDocUrlInput('');
+                      setShowDocUrlInput(false);
+                    }}
+                    disabled={isImportingDoc}
+                    className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs shrink-0"
+                  >
+                    {isImportingDoc ? 'Importing...' : 'Import Doc'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
+            <button
+              onClick={() => setShowDocUrlInput(!showDocUrlInput)}
+              className="flex-1 py-2.5 px-3.5 rounded-2xl bg-gradient-to-r from-sky-500 to-indigo-500 hover:from-sky-400 hover:to-indigo-400 text-white font-extrabold text-xs shadow-lg shadow-sky-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <FileText className="w-4 h-4" />
+              <span>Import Google Doc</span>
+            </button>
+
+            <button
+              onClick={async () => {
+                setIsCreatingNewDoc(true);
+                const title = `${business.name || 'Mailora AI'} - Business Knowledge Handbook`;
+                const content = `Company: ${business.name}\nIndustry: ${business.industry}\nWebsite: ${business.website}\n\nOfficial Services & Pricing:\n- Standard Package: High quality automated support\n- Turnaround time: Under 1 minute\n\nReturn & Support Policy:\n- 100% satisfaction guarantee.`;
+                const res = await createGoogleDocKnowledge(title, content);
+                setIsCreatingNewDoc(false);
+                if (res.success && res.documentUrl) {
+                  window.open(res.documentUrl, '_blank');
+                }
+              }}
+              disabled={isCreatingNewDoc}
+              className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5 text-sky-400" />
+              <span>{isCreatingNewDoc ? 'Creating...' : 'New Doc'}</span>
+            </button>
+
+            <a
+              href="https://docs.google.com"
+              target="_blank"
+              rel="noreferrer"
+              className="py-2.5 px-2.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-white border border-slate-800 text-xs font-semibold transition-all"
+              title="Open Google Docs"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        </div>
+
+        {/* 3. Google Sheets Live Activity Reports Card */}
+        <div className="rounded-3xl bg-gradient-to-br from-[#071714] via-[#0d1322] to-slate-950 border border-emerald-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-emerald-400/60 hover:-translate-y-1.5 transition-all duration-300">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div className="space-y-3 relative z-10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md group-hover:scale-105 transition-transform">
                   <FileSpreadsheet className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-extrabold text-white">Google Sheets Live Client Report</h3>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-extrabold text-white">Google Sheets Report</h3>
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                       Live Export
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400">Date-wise client list & subject report auto-added</p>
+                  <p className="text-[11px] text-slate-400">Date-wise Client Log Auto-Added</p>
                 </div>
               </div>
 
@@ -589,31 +707,30 @@ export const Dashboard: React.FC = () => {
                     : 'bg-slate-800 text-slate-400 border-slate-700'
                 }`}
               >
-                {googleSheetsConfig.isConnected ? 'Auto-Log Active ✓' : 'Not Connected'}
+                {googleSheetsConfig.isConnected ? 'Auto-Log Active ✓' : 'Not Linked'}
               </span>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Every time Mailora AI replies to a client email, a row is automatically added to your connected Google Sheet with the date, time, client name, email, subject, inquiry snippet, and AI reply summary.
+              Every dispatched AI reply appends a row to your connected Google Sheet with timestamp, client name, email, subject, inquiry snippet, and reply summary.
             </p>
 
             <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
               <div>
-                <span>Total Replies Logged:</span>
+                <span>Replies Logged:</span>
                 <strong className="text-white ml-1.5 font-mono">
                   {googleSheetsConfig.totalRowsLogged || autoReplyLogs.length} rows
                 </strong>
               </div>
               <div className="text-right">
-                <span>Spreadsheet Status:</span>
-                <span className="text-emerald-400 font-semibold ml-1">
-                  {googleSheetsConfig.isConnected ? 'Auto-Sync ON' : 'Ready to Connect'}
+                <span className="text-emerald-400 font-semibold">
+                  {googleSheetsConfig.isConnected ? 'Auto-Sync ON' : 'Ready'}
                 </span>
               </div>
             </div>
 
             {showCustomSheetInput && (
-              <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+              <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2 animate-in fade-in">
                 <label className="text-[11px] font-bold text-slate-300 block">
                   Paste Google Sheet URL or ID:
                 </label>
@@ -642,32 +759,33 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 pt-2 relative z-10">
+          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
             {googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetUrl ? (
               <>
                 <a
                   href={googleSheetsConfig.spreadsheetUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="py-2.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center gap-2"
+                  className="flex-1 py-2.5 px-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
                 >
                   <FileSpreadsheet className="w-4 h-4" />
-                  <span>Open Live Google Sheet ↗</span>
+                  <span>Open Sheet ↗</span>
                 </a>
 
                 <button
                   onClick={() => exportActivityToCsv()}
-                  className="py-2.5 px-3.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1.5"
+                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
                 >
                   <Download className="w-3.5 h-3.5 text-sky-400" />
-                  <span>Download Excel / CSV</span>
+                  <span>CSV</span>
                 </button>
 
                 <button
                   onClick={() => disconnectGoogleSheet()}
-                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-rose-950/30 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/40 text-xs font-semibold transition-all"
+                  className="py-2.5 px-2.5 rounded-2xl bg-slate-900 hover:bg-rose-950/30 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/40 text-xs font-semibold transition-all"
+                  title="Disconnect Sheet"
                 >
-                  Disconnect
+                  ✕
                 </button>
               </>
             ) : (
@@ -679,26 +797,26 @@ export const Dashboard: React.FC = () => {
                     setIsConnectingSheet(false);
                   }}
                   disabled={isConnectingSheet}
-                  className="py-2.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center gap-2"
+                  className="flex-1 py-2.5 px-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
                 >
                   <FileSpreadsheet className="w-4 h-4" />
-                  <span>{isConnectingSheet ? 'Creating Sheet...' : '⚡ Auto-Create & Link Google Sheet'}</span>
+                  <span>{isConnectingSheet ? 'Creating Sheet...' : 'Auto-Create Sheet'}</span>
                 </button>
 
                 <button
                   onClick={() => setShowCustomSheetInput(!showCustomSheetInput)}
-                  className="py-2.5 px-3.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1.5"
+                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
                 >
                   <LinkIcon className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Link Existing Sheet</span>
+                  <span>Link Sheet</span>
                 </button>
 
                 <button
                   onClick={() => exportActivityToCsv()}
-                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-semibold transition-all flex items-center gap-1"
+                  className="py-2.5 px-2.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-semibold transition-all"
+                  title="Export CSV"
                 >
                   <Download className="w-3.5 h-3.5 text-sky-400" />
-                  <span>CSV</span>
                 </button>
               </>
             )}

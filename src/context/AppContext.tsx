@@ -86,6 +86,10 @@ interface AppContextType {
   disconnectGoogleSheet: () => void;
   exportActivityToCsv: () => void;
 
+  // Google Docs Integration
+  importGoogleDoc: (docUrlOrId: string, category?: KnowledgeCategory) => Promise<{ success: boolean; title: string; docId: string }>;
+  createGoogleDocKnowledge: (title: string, content: string, category?: KnowledgeCategory) => Promise<{ success: boolean; documentId: string; documentUrl: string }>;
+
   // Google Drive Integration
   connectGoogleDrive: () => Promise<boolean>;
 
@@ -523,6 +527,117 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'Report Downloaded ✓',
       message: 'Downloaded client email activity as Excel/CSV.',
     });
+  };
+
+  // Import Google Doc into AI Knowledge Base
+  const importGoogleDoc = async (
+    docUrlOrId: string,
+    category: KnowledgeCategory = 'Company Information'
+  ): Promise<{ success: boolean; title: string; docId: string }> => {
+    try {
+      let docId = docUrlOrId.trim();
+      const match = docId.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
+      if (match) {
+        docId = match[1];
+      }
+
+      if (!docId) {
+        throw new Error('Please provide a valid Google Doc URL or ID.');
+      }
+
+      const docData = await GoogleDocsService.getDocumentContent(docId);
+      const docItem: KnowledgeItem = {
+        id: `gdoc_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        businessId: business.id,
+        title: docData.title || `Google Doc (${docId.slice(0, 8)})`,
+        category,
+        content: docData.text || 'Imported Google Doc content.',
+        sourceFileName: `${docData.title}.gdoc`,
+        sourceFileType: 'GOOGLE_DRIVE',
+        sourceFileSize: `${Math.round((docData.text.length / 1024) * 10) / 10} KB`,
+        sourceDriveFileId: docId,
+        sourceDriveLink: `https://docs.google.com/document/d/${docId}/edit`,
+        status: 'READY',
+        isEnabled: true,
+        lastDriveSyncAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      setKnowledge(prev => {
+        const next = [docItem, ...prev];
+        if (user?.uid) saveUserLocalData(user.uid, { knowledge: next });
+        return next;
+      });
+
+      FirestoreSyncService.saveKnowledgeItem(business.id, docItem);
+
+      addToast({
+        type: 'success',
+        title: 'Google Doc Imported & Indexed ✓',
+        message: `"${docData.title}" added to AI Knowledge Base.`,
+      });
+
+      return { success: true, title: docData.title, docId };
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Google Doc Import Failed',
+        message: err.message || 'Could not fetch Google Doc content.',
+      });
+      return { success: false, title: '', docId: '' };
+    }
+  };
+
+  // Create a brand new Google Doc in user's Drive and index it
+  const createGoogleDocKnowledge = async (
+    title: string,
+    content: string,
+    category: KnowledgeCategory = 'Company Information'
+  ): Promise<{ success: boolean; documentId: string; documentUrl: string }> => {
+    try {
+      const created = await GoogleDocsService.createDocument(title, content);
+      const docItem: KnowledgeItem = {
+        id: `gdoc_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        businessId: business.id,
+        title: title || 'New Knowledge Google Doc',
+        category,
+        content,
+        sourceFileName: `${title}.gdoc`,
+        sourceFileType: 'GOOGLE_DRIVE',
+        sourceFileSize: `${Math.round((content.length / 1024) * 10) / 10} KB`,
+        sourceDriveFileId: created.documentId,
+        sourceDriveLink: created.documentUrl,
+        status: 'READY',
+        isEnabled: true,
+        lastDriveSyncAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      setKnowledge(prev => {
+        const next = [docItem, ...prev];
+        if (user?.uid) saveUserLocalData(user.uid, { knowledge: next });
+        return next;
+      });
+
+      FirestoreSyncService.saveKnowledgeItem(business.id, docItem);
+
+      addToast({
+        type: 'success',
+        title: 'Google Doc Created & Synced ✓',
+        message: `Created "${title}" in Google Drive and indexed for AI replies.`,
+      });
+
+      return { success: true, documentId: created.documentId, documentUrl: created.documentUrl };
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Google Doc Creation Failed',
+        message: err.message || 'Could not create Google Doc in Drive.',
+      });
+      return { success: false, documentId: '', documentUrl: '' };
+    }
   };
 
   const loginAsDemoUser = () => {
@@ -1650,6 +1765,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         connectGoogleSheet,
         disconnectGoogleSheet,
         exportActivityToCsv,
+        importGoogleDoc,
+        createGoogleDocKnowledge,
         connectGoogleDrive,
         user,
         business,

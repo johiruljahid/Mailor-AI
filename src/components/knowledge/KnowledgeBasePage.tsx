@@ -22,6 +22,8 @@ import {
   HardDrive,
   RefreshCw,
   FolderSync,
+  FileSpreadsheet,
+  Link as LinkIcon,
 } from 'lucide-react';
 
 export const KnowledgeBasePage: React.FC = () => {
@@ -31,6 +33,10 @@ export const KnowledgeBasePage: React.FC = () => {
     updateKnowledgeItem,
     deleteKnowledgeItem,
     toggleKnowledgeItem,
+    importGoogleDoc,
+    createGoogleDocKnowledge,
+    googleSheetsConfig,
+    connectGoogleSheet,
     addToast,
   } = useApp();
 
@@ -41,6 +47,9 @@ export const KnowledgeBasePage: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [resyncingId, setResyncingId] = useState<string | null>(null);
   const [viewingItem, setViewingItem] = useState<KnowledgeItem | null>(null);
+  const [docUrlInput, setDocUrlInput] = useState('');
+  const [isImportingDoc, setIsImportingDoc] = useState(false);
+  const [showDocImportInput, setShowDocImportInput] = useState(false);
 
   // New item form
   const [title, setTitle] = useState('');
@@ -181,20 +190,50 @@ export const KnowledgeBasePage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Google Docs Import Button */}
+          <button
+            onClick={() => setShowDocImportInput(!showDocImportInput)}
+            className="px-3.5 py-2 rounded-xl text-xs font-bold text-sky-300 bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 shadow-sm transition-all flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <FileText className="w-4 h-4 text-sky-400" />
+            <span>Google Docs</span>
+          </button>
+
           {/* Google Drive Import Button */}
           <button
             onClick={() => setIsDriveModalOpen(true)}
-            className="px-4 py-2 rounded-xl text-xs font-bold text-amber-950 bg-amber-400 hover:bg-amber-300 shadow-md shadow-amber-400/20 transition-all flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+            className="px-3.5 py-2 rounded-xl text-xs font-bold text-amber-950 bg-amber-400 hover:bg-amber-300 shadow-md shadow-amber-400/20 transition-all flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
           >
             <HardDrive className="w-4 h-4 text-slate-900" />
-            <span>Import from Google Drive</span>
+            <span>Google Drive</span>
           </button>
 
+          {/* Google Sheets Live Link */}
+          {googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetUrl ? (
+            <a
+              href={googleSheetsConfig.spreadsheetUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3.5 py-2 rounded-xl text-xs font-bold text-emerald-300 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 transition-all flex items-center gap-1.5 hover:scale-[1.02]"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <span>Google Sheets ↗</span>
+            </a>
+          ) : (
+            <button
+              onClick={() => connectGoogleSheet()}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 transition-all flex items-center gap-1.5 hover:scale-[1.02]"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <span>Link Sheets</span>
+            </button>
+          )}
+
           {/* File Upload Button */}
-          <label className="cursor-pointer px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all flex items-center gap-2">
+          <label className="cursor-pointer px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all flex items-center gap-1.5">
             <UploadCloud className="w-4 h-4 text-sky-400" />
-            <span>{isUploading ? 'Chunking & Indexing...' : 'Upload File'}</span>
+            <span>{isUploading ? 'Indexing...' : 'Upload File'}</span>
             <input
               type="file"
               accept=".pdf,.docx,.txt,.csv,.xlsx"
@@ -206,13 +245,58 @@ export const KnowledgeBasePage: React.FC = () => {
           {/* Add Knowledge Button */}
           <button
             onClick={() => setIsAddModalOpen(true)}
-            className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/30 transition-all flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+            className="px-3.5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 shadow-md shadow-indigo-600/30 transition-all flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
           >
             <Plus className="w-4 h-4" />
-            <span>Add Manual Entry</span>
+            <span>Add Entry</span>
           </button>
         </div>
       </div>
+
+      {/* Google Docs Quick Import Dropdown Bar */}
+      {showDocImportInput && (
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-sky-500/15 via-slate-900 to-indigo-500/15 border border-sky-500/30 space-y-3 animate-in fade-in">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <FileText className="w-4 h-4 text-sky-400" />
+              <h3 className="text-xs font-bold text-white">Import Knowledge Directly from Google Docs</h3>
+            </div>
+            <button
+              onClick={() => setShowDocImportInput(false)}
+              className="text-slate-400 hover:text-white text-xs"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={docUrlInput}
+              onChange={e => setDocUrlInput(e.target.value)}
+              placeholder="Paste Google Doc URL or Document ID (e.g. https://docs.google.com/document/d/...)"
+              className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+            />
+            <button
+              onClick={async () => {
+                if (!docUrlInput) return;
+                setIsImportingDoc(true);
+                await importGoogleDoc(docUrlInput);
+                setIsImportingDoc(false);
+                setDocUrlInput('');
+                setShowDocImportInput(false);
+              }}
+              disabled={isImportingDoc}
+              className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs shrink-0 flex items-center justify-center gap-1.5"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>{isImportingDoc ? 'Fetching Doc...' : 'Import & Index Doc'}</span>
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-400">
+            Mailora extracts text from your Google Doc and uses it as grounded reference knowledge for AI email replies.
+          </p>
+        </div>
+      )}
 
       {/* Google Drive Connected Banner */}
       <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-slate-900 to-indigo-500/10 border border-amber-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
