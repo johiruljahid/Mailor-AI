@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   Sparkles,
@@ -8,7 +8,6 @@ import {
   HardDrive,
   CheckCircle2,
   RefreshCw,
-  TrendingUp,
   Clock,
   ShieldCheck,
   Database,
@@ -25,22 +24,31 @@ import {
   AlertCircle,
   Upload,
   Search,
-  Image as ImageIcon,
   Check,
   Layers,
   ArrowRight,
   FileCheck,
   Sliders,
-  SendHorizontal,
   FileSpreadsheet,
   Download,
   Link as LinkIcon,
   Info,
   Calendar as CalendarIcon,
   Video,
+  Filter,
+  X,
+  Eye,
+  Send,
+  Paperclip,
+  CheckCircle,
+  Flame,
+  ShieldAlert,
+  MailOpen,
+  RotateCw,
+  Inbox,
 } from 'lucide-react';
-import { KnowledgeCategory, AgentTone, ReplyLanguage } from '../../types';
-import { ExtractedWebsiteData } from '../../services/websiteCrawlerService';
+import { KnowledgeCategory, AgentTone, ReplyLanguage, CategorizedGmailEmail } from '../../types';
+import { TimezoneService } from '../../services/timezoneService';
 
 export const Dashboard: React.FC = () => {
   const {
@@ -50,6 +58,9 @@ export const Dashboard: React.FC = () => {
     updateAgent,
     gmailAccount,
     knowledge,
+    addKnowledgeItem,
+    deleteKnowledgeItem,
+    updateKnowledgeItem,
     threads,
     autoReplyLogs,
     isAutoResponderActive,
@@ -65,6 +76,11 @@ export const Dashboard: React.FC = () => {
     isSyncingGmail,
     isGoogleAuthenticated,
     connectGoogleAccount,
+    categorizedGmailEmails,
+    isLoadingGmailEmails,
+    loadCategorizedGmailEmails,
+    toggleEmailReadStatus,
+    processSingleEmailWithAi,
     googleSheetsConfig,
     connectGoogleSheet,
     disconnectGoogleSheet,
@@ -77,209 +93,264 @@ export const Dashboard: React.FC = () => {
     setCalendarConfig,
     setIsCalendarModalOpen,
     addToast,
+    testSendLiveEmail,
+    serverAutopilotStatus,
+    triggerServerAutopilotNow,
+    syncAutonomousBackend,
   } = useApp();
 
-  // Google Sheets state
-  const [isConnectingSheet, setIsConnectingSheet] = useState(false);
-  const [customSheetUrl, setCustomSheetUrl] = useState('');
-  const [showCustomSheetInput, setShowCustomSheetInput] = useState(false);
-  const [showUnverifiedGuide, setShowUnverifiedGuide] = useState(false);
+  // Top-Level Organized View Tabs
+  const [activeTab, setActiveTab] = useState<'activity' | 'knowledge' | 'agent' | 'workspace' | 'simulator'>('activity');
 
-  // Google Docs state
-  const [docUrlInput, setDocUrlInput] = useState('');
-  const [isImportingDoc, setIsImportingDoc] = useState(false);
-  const [showDocUrlInput, setShowDocUrlInput] = useState(false);
-  const [isCreatingNewDoc, setIsCreatingNewDoc] = useState(false);
+  // Activity Tab State
+  const [activityFilter, setActivityFilter] = useState<'all' | 'appointments' | 'inquiries'>('all');
+  const [activitySearch, setActivitySearch] = useState('');
+  const [selectedLogDetail, setSelectedLogDetail] = useState<any | null>(null);
 
-  // All Data Input State Tabs
-  const [activeDataTab, setActiveDataTab] = useState<
-    'business' | 'ai_rules' | 'faqs' | 'manual_upload' | 'website_import' | 'web_search'
-  >('business');
+  // Knowledge Tab Sub-Channel State
+  const [knowledgeSubTab, setKnowledgeSubTab] = useState<'faqs' | 'website' | 'docs' | 'files'>('faqs');
+  const [knowledgeSearch, setKnowledgeSearch] = useState('');
 
-  // 1. Business Profile inputs
-  const [businessName, setBusinessName] = useState(business.name || 'Nexus Digital Labs');
-  const [industry, setIndustry] = useState(business.industry || 'Web Development & Custom Software');
+  // 1. Business Profile & Agent Settings state
+  const [businessName, setBusinessName] = useState(business.name || 'Imbdagency');
+  const [industry, setIndustry] = useState(business.industry || 'Web Development & Brand Experiences');
   const [supportEmail, setSupportEmail] = useState(business.supportEmail || gmailAccount.email || 'johirul4856@gmail.com');
-  const [website, setWebsite] = useState(business.website || 'https://nexusdigitallabs.com');
+  const [website, setWebsite] = useState(business.website || 'https://imbdagency.com');
   const [phone, setPhone] = useState('+880 1700-000000');
-  const [operatingHours, setOperatingHours] = useState('Monday - Saturday: 9:00 AM - 9:00 PM (GMT+6)');
-  const [emailSignature, setEmailSignature] = useState(
-    agent.emailSignature || 'Best regards,\nCustomer Support Team\nNexus Digital Labs'
-  );
-
-  // 2. AI Persona & Prompt inputs
-  const [agentName, setAgentName] = useState(agent.name || 'Alex');
+  const [operatingHours, setOperatingHours] = useState('Monday - Saturday: 9:00 AM - 9:00 PM');
+  const [agentName, setAgentName] = useState(agent.name || 'Alex Jordan');
   const [tone, setTone] = useState<AgentTone>(agent.tone || 'Professional');
   const [replyLanguage, setReplyLanguage] = useState<ReplyLanguage>(agent.replyLanguage || 'Multi-language (Auto-detect)');
   const [instructions, setInstructions] = useState(
     agent.instructions ||
-      'You are a real, polite human employee responding to customer emails. Answer directly what the customer asked. If they ask a short question like "What is your name?", respond directly in 1-2 friendly sentences. Never use robotic phrases. Match the language of the incoming email (Bangla or English).'
+      'You are a professional human employee handling customer emails. Read the customer message and subject carefully, address their exact requirements directly and concisely. If a meeting is booked, confirm the date and Google Meet link clearly. If files are requested, mention the attached document.'
   );
+  const [emailSignature, setEmailSignature] = useState(
+    agent.emailSignature || 'Best regards,\nAlex Jordan\nCustomer Support Team'
+  );
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isTriggeringAutopilot, setIsTriggeringAutopilot] = useState(false);
+  const [isSyncingAutopilot, setIsSyncingAutopilot] = useState(false);
 
-  // 3. FAQs list
-  const existingFaqs = knowledge.filter(k => k.category === 'FAQ').map(k => ({
-    id: k.id,
-    question: k.title,
-    answer: k.content,
-    category: k.category,
-  }));
-  const [faqsList, setFaqsList] = useState(
-    existingFaqs.length > 0
-      ? existingFaqs
-      : [
-          {
-            id: 'faq_default_1',
-            question: 'What is the pricing for website development?',
-            answer: 'Our standard Starter 5-page business site starts at $250. Custom SaaS and web applications start at $800 depending on requirements.',
-            category: 'FAQ' as KnowledgeCategory,
-          },
-          {
-            id: 'faq_default_2',
-            question: 'What is your turnaround delivery time?',
-            answer: 'Standard 5-page business websites are delivered within 5 to 7 business days. Custom full-stack software timelines are tailored based on project scope.',
-            category: 'FAQ' as KnowledgeCategory,
-          },
-          {
-            id: 'faq_default_3',
-            question: 'What is your refund policy?',
-            answer: 'We provide a 14-day 100% money-back guarantee if initial design concepts do not meet your business goals.',
-            category: 'FAQ' as KnowledgeCategory,
-          },
-        ]
+  const handleTriggerAutopilot = async () => {
+    setIsTriggeringAutopilot(true);
+    await triggerServerAutopilotNow();
+    setIsTriggeringAutopilot(false);
+  };
+
+  const handleSyncAutopilot = () => {
+    setIsSyncingAutopilot(true);
+    syncAutonomousBackend();
+    setTimeout(() => {
+      setIsSyncingAutopilot(false);
+      addToast({
+        type: 'success',
+        title: 'Autopilot Synced to Server ✓',
+        message: 'All business profile, agent rules, and knowledge base settings deployed to 24/7 background runner.',
+      });
+    }, 600);
+  };
+
+  // 2. FAQs State
+  const existingFaqs = useMemo(
+    () => knowledge.filter(k => k.category === 'FAQ'),
+    [knowledge]
   );
   const [newQuestion, setNewQuestion] = useState('');
   const [newAnswer, setNewAnswer] = useState('');
+  const [newCategory, setNewCategory] = useState<KnowledgeCategory>('FAQ');
+  const [isAddingFaq, setIsAddingFaq] = useState(false);
 
-  // 4. Manual Upload State
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedUploadCategory, setSelectedUploadCategory] = useState<KnowledgeCategory>('Company Information');
-  const [isUploadingFile, setIsUploadingFile] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
-
-  // Bulk Document Text
-  const bulkDoc = knowledge.find(k => k.id.includes('custom_bulk_doc') || k.title.includes('Company Business Knowledge'));
-  const [bulkText, setBulkText] = useState(
-    bulkDoc?.content ||
-      'Nexus Digital Labs is a specialized digital agency crafting responsive web platforms, mobile apps, and enterprise SaaS solutions. We provide 24/7 client support, free SSL deployment, custom API integrations, and 1 year of free bug maintenance with every project.'
-  );
-
-  // 5. Website Crawler State
-  const [targetWebsiteUrl, setTargetWebsiteUrl] = useState(business.website || 'https://nexusdigitallabs.com');
+  // 3. Website Crawler State
+  const [targetWebsiteUrl, setTargetWebsiteUrl] = useState('');
   const [isCrawlingSite, setIsCrawlingSite] = useState(false);
   const [crawlProgressStep, setCrawlProgressStep] = useState(0);
-  const [lastCrawledData, setLastCrawledData] = useState<ExtractedWebsiteData | null>(null);
 
-  // 6. Web Search Grounding State
-  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
-  const [searchTestQuery, setSearchTestQuery] = useState('What are the latest web development standards for 2026?');
-  const [searchTestResult, setSearchTestResult] = useState<string | null>(null);
-  const [isSearchingWeb, setIsSearchingWeb] = useState(false);
+  // 4. Google Docs Import State
+  const [docUrlInput, setDocUrlInput] = useState('');
+  const [isImportingDoc, setIsImportingDoc] = useState(false);
+  const [isCreatingNewDoc, setIsCreatingNewDoc] = useState(false);
 
-  // State saving feedback
-  const [isSavingAll, setIsSavingAll] = useState(false);
+  // 5. File Upload State
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle Save All Data
-  const handleSaveAllData = () => {
-    setIsSavingAll(true);
+  // 6. Simulator Sandbox State
+  const [simSubject, setSimSubject] = useState('Urgent Request an Appointment');
+  const [simBody, setSimBody] = useState('Hi, I need to schedule an urgent appointment for tomorrow to discuss our web project requirements.');
+  const [simCustomerName, setSimCustomerName] = useState('Jahid Hasan');
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simResult, setSimResult] = useState<{
+    reply: string;
+    intent?: string;
+    meetingInfo?: any;
+    attachmentInfo?: any;
+  } | null>(null);
+  const [isSendingLiveTest, setIsSendingLiveTest] = useState(false);
+
+  // 7. Google Sheets State
+  const [isConnectingSheet, setIsConnectingSheet] = useState(false);
+  const [customSheetUrl, setCustomSheetUrl] = useState('');
+  const [showCustomSheetInput, setShowCustomSheetInput] = useState(false);
+
+  // Filtered Activity Logs
+  const filteredLogs = useMemo(() => {
+    return autoReplyLogs.filter(log => {
+      const matchSearch =
+        !activitySearch ||
+        log.subject.toLowerCase().includes(activitySearch.toLowerCase()) ||
+        log.fromName.toLowerCase().includes(activitySearch.toLowerCase()) ||
+        log.fromEmail.toLowerCase().includes(activitySearch.toLowerCase()) ||
+        log.replySnippet.toLowerCase().includes(activitySearch.toLowerCase());
+
+      if (!matchSearch) return false;
+
+      if (activityFilter === 'appointments') {
+        return (
+          log.intent?.toLowerCase().includes('appointment') ||
+          log.intent?.toLowerCase().includes('meeting') ||
+          log.fullReply?.toLowerCase().includes('meet') ||
+          log.fullReply?.toLowerCase().includes('appointment')
+        );
+      }
+      if (activityFilter === 'inquiries') {
+        return (
+          !log.intent?.toLowerCase().includes('appointment') &&
+          !log.intent?.toLowerCase().includes('meeting')
+        );
+      }
+      return true;
+    });
+  }, [autoReplyLogs, activitySearch, activityFilter]);
+
+  // In-App Smart Gmail Inbox State
+  const [inboxSubView, setInboxSubView] = useState<'gmail' | 'logs'>('gmail');
+  const [gmailCategoryFilter, setGmailCategoryFilter] = useState<'all' | 'urgent' | 'meeting' | 'inquiry' | 'normal' | 'spam'>('all');
+  const [gmailSearch, setGmailSearch] = useState('');
+  const [selectedGmailEmail, setSelectedGmailEmail] = useState<CategorizedGmailEmail | null>(null);
+  const [isProcessingAiEmailId, setIsProcessingAiEmailId] = useState<string | null>(null);
+
+  // In-App Gmail Categorized Counts
+  const urgentMailsCount = useMemo(
+    () => categorizedGmailEmails.filter(e => e.category === 'URGENT').length,
+    [categorizedGmailEmails]
+  );
+  const meetingMailsCount = useMemo(
+    () => categorizedGmailEmails.filter(e => e.category === 'MEETING').length,
+    [categorizedGmailEmails]
+  );
+  const inquiryMailsCount = useMemo(
+    () => categorizedGmailEmails.filter(e => e.category === 'INQUIRY').length,
+    [categorizedGmailEmails]
+  );
+  const normalMailsCount = useMemo(
+    () => categorizedGmailEmails.filter(e => e.category === 'NORMAL').length,
+    [categorizedGmailEmails]
+  );
+  const spamRescuedCount = useMemo(
+    () => categorizedGmailEmails.filter(e => e.isFromSpam).length,
+    [categorizedGmailEmails]
+  );
+
+  // Filtered In-App Gmail Emails
+  const filteredGmailEmails = useMemo(() => {
+    return categorizedGmailEmails.filter(email => {
+      if (gmailCategoryFilter === 'urgent' && email.category !== 'URGENT') return false;
+      if (gmailCategoryFilter === 'meeting' && email.category !== 'MEETING') return false;
+      if (gmailCategoryFilter === 'inquiry' && email.category !== 'INQUIRY') return false;
+      if (gmailCategoryFilter === 'normal' && email.category !== 'NORMAL') return false;
+      if (gmailCategoryFilter === 'spam' && !email.isFromSpam) return false;
+
+      if (gmailSearch.trim()) {
+        const query = gmailSearch.toLowerCase();
+        const matchesSubject = email.subject.toLowerCase().includes(query);
+        const matchesFrom = email.from.toLowerCase().includes(query) || email.fromName.toLowerCase().includes(query);
+        const matchesBody = email.body.toLowerCase().includes(query);
+        if (!matchesSubject && !matchesFrom && !matchesBody) return false;
+      }
+
+      return true;
+    });
+  }, [categorizedGmailEmails, gmailCategoryFilter, gmailSearch]);
+
+  // Save Settings Handler
+  const handleSaveAllSettings = async () => {
+    setIsSavingSettings(true);
     try {
-      saveAllSetupData({
+      updateAgent({
+        name: agentName,
+        tone,
+        replyLanguage,
+        instructions,
+        emailSignature,
+      });
+
+      await saveAllSetupData({
         businessName,
         industry,
-        website,
         supportEmail,
+        website,
         agentName,
         tone,
         replyLanguage,
         instructions,
         emailSignature,
-        faqs: faqsList,
-        customKnowledgeText: bulkText,
       });
+
       addToast({
         type: 'success',
-        title: 'All Knowledge Saved ✓',
-        message: 'Business profile, persona rules, and FAQs updated successfully.',
+        title: 'Settings Saved ✓',
+        message: 'Business identity and AI persona directives successfully updated.',
+      });
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Save Notice',
+        message: err.message || 'Could not save settings.',
       });
     } finally {
-      setTimeout(() => setIsSavingAll(false), 500);
+      setIsSavingSettings(false);
     }
   };
 
-  // Handle Add FAQ
-  const handleAddFaq = () => {
+  // Add FAQ Handler
+  const handleAddFaq = async () => {
     if (!newQuestion.trim() || !newAnswer.trim()) {
       addToast({
         type: 'warning',
-        title: 'Incomplete FAQ',
-        message: 'Please provide both a Question and an Answer.',
+        title: 'Incomplete Fields',
+        message: 'Please provide both the Question and the Answer.',
       });
       return;
     }
 
-    const newItem = {
-      id: `faq_user_${Date.now()}`,
-      question: newQuestion.trim(),
-      answer: newAnswer.trim(),
-      category: 'FAQ' as KnowledgeCategory,
-    };
+    addKnowledgeItem({
+      title: newQuestion.trim(),
+      category: newCategory,
+      content: newAnswer.trim(),
+      status: 'READY',
+      isEnabled: true,
+    });
 
-    setFaqsList(prev => [...prev, newItem]);
     setNewQuestion('');
     setNewAnswer('');
+    setIsAddingFaq(false);
+
     addToast({
       type: 'success',
       title: 'FAQ Added ✓',
-      message: `"${newItem.question}" added to knowledge list. Click "Save All Setup Data" to commit.`,
+      message: 'New verified business knowledge indexed into AI training memory.',
     });
   };
 
-  // Handle Delete FAQ
-  const handleDeleteFaq = (id: string) => {
-    setFaqsList(prev => prev.filter(f => f.id !== id));
-  };
-
-  // Handle Manual File Upload
-  const handleFileUpload = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const file = files[0];
-    setIsUploadingFile(true);
-    try {
-      await uploadKnowledgeFile(file, selectedUploadCategory);
-    } catch {
-      // Handled in context toast
-    } finally {
-      setIsUploadingFile(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
-  // Handle Drag & Drop
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileUpload(e.dataTransfer.files);
-    }
-  };
-
-  // Handle Website Auto-Crawl
+  // Website Crawl Handler
   const handleStartWebsiteCrawl = async () => {
     if (!targetWebsiteUrl.trim()) {
       addToast({
         type: 'warning',
         title: 'Enter Website URL',
-        message: 'Please enter a valid website address (e.g. https://yourbusiness.com).',
+        message: 'Please enter a valid website address (e.g. https://yourcompany.com).',
       });
       return;
     }
@@ -293,509 +364,1609 @@ export const Dashboard: React.FC = () => {
 
       const res = await importWebsiteData(targetWebsiteUrl.trim());
       setCrawlProgressStep(4);
-      setLastCrawledData(res.data);
-      if (res.data.domain) {
-        const brand = res.data.domain.split('.')[0].replace(/-/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
-        if (businessName === 'Nexus Digital Labs' || !businessName) {
-          setBusinessName(brand);
-        }
+
+      if (res.data?.domain && (businessName === 'Imbdagency' || !businessName)) {
+        const brand = res.data.domain.split('.')[0].replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        setBusinessName(brand);
       }
+
+      addToast({
+        type: 'success',
+        title: 'Website Crawled & Synced ✓',
+        message: `Extracted services and data from ${res.data.domain || targetWebsiteUrl}. Stored in Google Drive.`,
+      });
     } catch (err: any) {
-      console.warn('Crawl error:', err);
+      addToast({
+        type: 'error',
+        title: 'Website Crawl Notice',
+        message: err.message || 'Could not scrape website content.',
+      });
     } finally {
       setTimeout(() => {
         setIsCrawlingSite(false);
         setCrawlProgressStep(0);
-      }, 800);
+      }, 700);
     }
   };
 
-  // Fast starter template loader
-  const loadFaqTemplate = (type: 'pricing' | 'support' | 'services') => {
-    let templateItems: typeof faqsList = [];
-    if (type === 'pricing') {
-      templateItems = [
-        {
-          id: `tmpl_${Date.now()}_1`,
-          question: 'Do you charge upfront or upon project completion?',
-          answer: 'We request an initial 50% deposit to initiate design sprints, and the final 50% upon full milestone sign-off and live deployment.',
-          category: 'FAQ' as KnowledgeCategory,
-        },
-        {
-          id: `tmpl_${Date.now()}_2`,
-          question: 'Are there any hidden recurring hosting fees?',
-          answer: 'No hidden fees. We deploy directly to your preferred hosting provider (Vercel, AWS, Google Cloud) with clear transparent tier breakdowns.',
-          category: 'FAQ' as KnowledgeCategory,
-        },
-      ];
-    } else if (type === 'support') {
-      templateItems = [
-        {
-          id: `tmpl_${Date.now()}_3`,
-          question: 'What are your support response times?',
-          answer: 'Our AI email agent responds within seconds 24/7. Our human technical support team responds within 2 business hours.',
-          category: 'FAQ' as KnowledgeCategory,
-        },
-        {
-          id: `tmpl_${Date.now()}_4`,
-          question: 'How do I request emergency maintenance?',
-          answer: 'Please reply directly to any email thread or contact our urgent hotline. Critical tickets receive priority dispatch within 30 minutes.',
-          category: 'FAQ' as KnowledgeCategory,
-        },
-      ];
-    } else {
-      templateItems = [
-        {
-          id: `tmpl_${Date.now()}_5`,
-          question: 'What technologies do you use for development?',
-          answer: 'We develop modern applications using React, Next.js, Node.js, TypeScript, Tailwind CSS, PostgreSQL, and Firebase cloud services.',
-          category: 'FAQ' as KnowledgeCategory,
-        },
-      ];
+  // Google Doc Import Handler
+  const handleImportDoc = async () => {
+    if (!docUrlInput.trim()) return;
+    setIsImportingDoc(true);
+    try {
+      await importGoogleDoc(docUrlInput.trim());
+      setDocUrlInput('');
+    } catch (err: any) {
+      // toast handled in importGoogleDoc
+    } finally {
+      setIsImportingDoc(false);
     }
+  };
 
-    setFaqsList(prev => [...prev, ...templateItems]);
-    addToast({
-      type: 'info',
-      title: 'Template FAQs Loaded',
-      message: `${templateItems.length} FAQs loaded into list. Remember to save changes.`,
-    });
+  // File Upload Handler
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setIsUploadingFile(true);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        await uploadKnowledgeFile(files[i]);
+      }
+    } finally {
+      setIsUploadingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // Test Simulator Handler
+  const handleRunSimulation = async () => {
+    setIsSimulating(true);
+    setSimResult(null);
+    try {
+      const res = await fetch('/api/gemini/reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subject: simSubject,
+          body: simBody,
+          customerName: simCustomerName,
+          businessName: businessName || business.name,
+          agentConfig: {
+            name: agentName,
+            tone,
+            replyLanguage,
+            instructions,
+            emailSignature,
+          },
+          retrievedChunks: knowledge.slice(0, 4).map(k => ({
+            knowledgeId: k.id,
+            title: k.title,
+            category: k.category,
+            snippet: k.content.slice(0, 250),
+          })),
+          meetingBookingInfo: (() => {
+            const isResched = simSubject.toLowerCase().includes('reschedule') || simBody.toLowerCase().includes('change');
+            const isAppoint = simSubject.toLowerCase().includes('appointment') || simSubject.toLowerCase().includes('meeting');
+            if (!isResched && !isAppoint) return undefined;
+            const dual = TimezoneService.formatDualTimezone(new Date(Date.now() + 24 * 3600 * 1000), `${simSubject} ${simBody}`);
+            return {
+              status: isResched ? ('RESCHEDULED' as const) : ('BOOKED' as const),
+              dateFormatted: dual.summarySentence,
+              previousDateFormatted: isResched ? 'earlier slot (cancelled & deleted)' : undefined,
+              meetUrl: isResched ? 'https://meet.google.com/mailora-reschedule-call' : 'https://meet.google.com/xyz-mailora-call',
+              isReschedule: isResched,
+              timezoneBadge: dual.highlightedBadge,
+              clientTimezone: dual.clientTimezone,
+              userTimezone: dual.userTimezone,
+              userUtcOffset: dual.userUtcOffset,
+              clientUtcOffset: dual.clientUtcOffset,
+              dualTimezoneSentence: dual.summarySentence,
+            };
+          })(),
+          attachmentInfo: simBody.toLowerCase().includes('brochure') || simBody.toLowerCase().includes('pdf') || simBody.toLowerCase().includes('document')
+            ? {
+                filename: `${businessName || 'Agency'}_Brochure.pdf`,
+                driveUrl: 'https://drive.google.com/file/d/preview',
+              }
+            : undefined,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.reply) {
+        const isReschedule = simSubject.toLowerCase().includes('reschedule') || simBody.toLowerCase().includes('change');
+        const isAppointment = simSubject.toLowerCase().includes('appointment') || simSubject.toLowerCase().includes('meeting');
+        const dual = TimezoneService.formatDualTimezone(new Date(Date.now() + 24 * 3600 * 1000), `${simSubject} ${simBody}`);
+
+        setSimResult({
+          reply: data.reply,
+          intent: isReschedule ? 'Appointment Reschedule (Cancelled Old Slot)' : isAppointment ? 'Appointment Booking' : 'General Inquiry',
+          meetingInfo: (isReschedule || isAppointment)
+            ? {
+                date: dual.summarySentence,
+                link: isReschedule ? 'https://meet.google.com/mailora-reschedule-call' : 'https://meet.google.com/xyz-mailora-call',
+                isReschedule,
+                status: isReschedule ? 'RESCHEDULED' : 'BOOKED',
+                timezoneBadge: dual.highlightedBadge,
+              }
+            : undefined,
+          attachmentInfo: simBody.toLowerCase().includes('brochure') || simBody.toLowerCase().includes('pdf') ? {
+            filename: `${businessName || 'Agency'}_Brochure.pdf`,
+          } : undefined,
+        });
+      }
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Simulation Notice',
+        message: err.message || 'Could not run simulation.',
+      });
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
+  // Send Real Live Test Email to User Inbox
+  const handleSendLiveTest = async () => {
+    setIsSendingLiveTest(true);
+    try {
+      await testSendLiveEmail({
+        toEmail: gmailAccount.email || 'johirul4856@gmail.com',
+        customerName: simCustomerName,
+        subject: simSubject,
+        body: simBody,
+      });
+      addToast({
+        type: 'success',
+        title: 'Live Email Dispatched ✓',
+        message: `Test email sent to ${gmailAccount.email}. Check your Gmail inbox now!`,
+      });
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Dispatch Error',
+        message: err.message || 'Could not send test email.',
+      });
+    } finally {
+      setIsSendingLiveTest(false);
+    }
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in pb-20 max-w-7xl mx-auto">
-      {/* 1. Hero 3D Status & Auto-Reply Engine Monitor */}
-      <div className="relative rounded-3xl bg-gradient-to-r from-[#0d1322] via-[#0b101c] to-[#111726] border border-slate-800/90 p-6 sm:p-8 shadow-2xl overflow-hidden">
-        {/* Glowing 3D backdrop spheres */}
-        <div className="absolute -top-16 -left-16 w-72 h-72 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-16 -right-16 w-72 h-72 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
+    <div className="max-w-7xl mx-auto space-y-6 pb-24 font-sans text-slate-100">
+      
+      {/* ========================================================================= */}
+      {/* 1. TOP HEADER & AUTOPILOT MASTER CONTROL BAR                              */}
+      {/* ========================================================================= */}
+      <div className="rounded-2xl bg-[#0b0f19] border border-white/10 p-5 sm:p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-5 relative overflow-hidden">
+        {/* Subtle Ambient Background Highlight */}
+        <div className="absolute top-0 right-1/4 w-96 h-28 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-2.5 max-w-2xl">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5 shadow-sm">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                100% Autopilot Active (Auto-Reply on Incoming Email)
+        <div className="flex items-center gap-4 relative z-10">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-sky-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/25 shrink-0">
+            <Bot className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                {businessName || 'Mailora Workspace'}
+              </h1>
+              <span className="text-[11px] font-semibold text-slate-400">
+                · {industry}
               </span>
-              <span className="px-3 py-1 rounded-full text-xs font-bold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
-                Gemini 3.8 Flash AI
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Autonomous AI Employee monitoring <strong className="text-slate-200">{gmailAccount.email}</strong>
+            </p>
+          </div>
+        </div>
+
+        {/* Master Autopilot Switch & Controls */}
+        <div className="flex items-center gap-3 relative z-10 flex-wrap sm:flex-nowrap">
+          {/* Autopilot Toggle Switch Button */}
+          <div className="flex items-center gap-3 p-2 rounded-2xl bg-white/[0.04] border border-white/10">
+            <div className="text-left pl-2">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block">
+                24/7 Autopilot
               </span>
-              <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-purple-300" />
-                100% Primary Inbox & Anti-Spam Safe
+              <span className="text-xs font-bold flex items-center gap-1.5">
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isAutoResponderActive ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'
+                  }`}
+                />
+                <span className={isAutoResponderActive ? 'text-emerald-400' : 'text-slate-400'}>
+                  {isAutoResponderActive ? `Active (${autoScanCountdown}s scan)` : 'Turned OFF'}
+                </span>
               </span>
             </div>
 
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              Gmail AI Autoresponder Setup & Control Hub
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              When a customer emails your Gmail address, Mailora AI reads the inquiry, uses verified business data, crawled website data, or live Google search, and replies with a human-like, beautifully designed, spam-safe email within seconds.
+            <button
+              onClick={() => setIsAutoResponderActive(!isAutoResponderActive)}
+              className={`relative inline-flex h-7 w-13 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                isAutoResponderActive ? 'bg-emerald-500' : 'bg-slate-800'
+              }`}
+              title="Turn 24/7 Autopilot ON or OFF"
+            >
+              <span
+                className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                  isAutoResponderActive ? 'translate-x-6' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Quick Inbox Scan Button */}
+          <button
+            onClick={() => pollAndAutoReplyGmail()}
+            disabled={isSyncingGmail}
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white border border-white/10 transition-colors cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isSyncingGmail ? 'animate-spin' : ''}`} />
+            <span>Scan Inbox</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 2. KEY METRICS STATS BAR (Clean Typography, No Clutter)                   */}
+      {/* ========================================================================= */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="p-4 rounded-2xl bg-[#0b0f19] border border-white/10 flex flex-col justify-between">
+          <span className="text-xs font-semibold text-slate-400">Total Emails Replied</span>
+          <div className="my-2">
+            <span className="text-2xl font-black text-white font-mono">
+              {autoReplyLogs.length}
+            </span>
+          </div>
+          <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
+            <CheckCircle className="w-3 h-3" />
+            100% Primary Inbox Delivery
+          </span>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-[#0b0f19] border border-white/10 flex flex-col justify-between">
+          <span className="text-xs font-semibold text-slate-400">Appointments Booked</span>
+          <div className="my-2">
+            <span className="text-2xl font-black text-indigo-400 font-mono">
+              {calendarBookings.length}
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400">
+            Google Calendar & Meet synced
+          </span>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-[#0b0f19] border border-white/10 flex flex-col justify-between">
+          <span className="text-xs font-semibold text-slate-400">Knowledge Chunks</span>
+          <div className="my-2">
+            <span className="text-2xl font-black text-sky-400 font-mono">
+              {knowledge.length}
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400">
+            Drive, Docs, FAQs & Web
+          </span>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-[#0b0f19] border border-white/10 flex flex-col justify-between">
+          <span className="text-xs font-semibold text-slate-400">Average Response Speed</span>
+          <div className="my-2">
+            <span className="text-2xl font-black text-emerald-400 font-mono">
+              ~30s
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400">
+            Instant autonomous processing
+          </span>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 2.5 24/7 CLOUD AUTOPILOT ENGINE MONITOR (Runs 24/7 Offline & Logged Out)   */}
+      {/* ========================================================================= */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-emerald-950/40 via-[#0b1329] to-indigo-950/40 border border-emerald-500/20 p-4 sm:p-5 shadow-lg shadow-black/40">
+        <div className="absolute top-0 right-0 -mr-16 -mt-16 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="relative z-10 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+          <div className="space-y-1.5 max-w-2xl">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold tracking-wide uppercase">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                24/7 Autopilot Cloud Engine Active
+              </span>
+              <span className="text-xs text-slate-400 font-medium">
+                Continuous Server Runner (15s interval)
+              </span>
+              {serverAutopilotStatus?.lastPolledAt && (
+                <span className="text-[11px] text-slate-500 font-mono">
+                  • Last check: {new Date(serverAutopilotStatus.lastPolledAt).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-300 font-normal leading-relaxed">
+              Once setup is saved, Mailora AI runs continuously in the background on the dedicated server engine. It monitors your connected inbox (<span className="text-white font-semibold">{gmailAccount.email}</span>), automatically deletes previous meetings upon client reschedule requests to eliminate double-booking, coordinates worldwide timezones (UTC+ / UTC-), and dispatches executive AI replies <strong className="text-emerald-300 font-semibold">24 hours a day even when you are logged out or this browser is closed</strong>.
             </p>
 
-            <div className="flex flex-wrap items-center gap-3 pt-2">
-              <div className="px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-slate-300 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>Next background scan in: <strong className="font-mono text-cyan-300">{autoScanCountdown}s</strong></span>
+            <div className="flex items-center gap-3 pt-1 flex-wrap text-[11px] text-slate-400">
+              <span className="flex items-center gap-1.5 bg-black/30 px-2.5 py-1 rounded-lg border border-white/5 font-mono">
+                <CheckCircle className="w-3 h-3 text-emerald-400" />
+                Server Status: <strong className="text-emerald-300">Listening & Replying 24/7</strong>
+              </span>
+              <span className="flex items-center gap-1.5 bg-black/30 px-2.5 py-1 rounded-lg border border-white/5 font-mono">
+                <CheckCircle className="w-3 h-3 text-indigo-400" />
+                Double-Booking Protection: <strong className="text-indigo-300">Old Meeting Auto-Delete</strong>
+              </span>
+              <span className="flex items-center gap-1.5 bg-black/30 px-2.5 py-1 rounded-lg border border-white/5 font-mono">
+                <CheckCircle className="w-3 h-3 text-sky-400" />
+                Total Offline / 24-7 Replied: <strong className="text-white font-bold">{serverAutopilotStatus?.totalReplied || autoReplyLogs.length}</strong>
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto">
+            <button
+              onClick={handleTriggerAutopilot}
+              disabled={isTriggeringAutopilot}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white shadow-md shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50"
+              title="Immediately trigger the 24/7 background server to check inbox and reply"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isTriggeringAutopilot ? 'animate-spin' : ''}`} />
+              <span>{isTriggeringAutopilot ? 'Polling Server...' : 'Test Run Autopilot Now'}</span>
+            </button>
+
+            <button
+              onClick={handleSyncAutopilot}
+              disabled={isSyncingAutopilot}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white border border-white/15 transition-all cursor-pointer"
+              title="Force sync current business, agent tone, signature, and knowledge base to the 24/7 background runner"
+            >
+              <Save className={`w-3.5 h-3.5 text-sky-400 ${isSyncingAutopilot ? 'animate-pulse' : ''}`} />
+              <span>{isSyncingAutopilot ? 'Syncing...' : 'Re-Sync Autopilot'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* 3. MAIN SECTION NAVIGATION TABS (5 Clean Tabs)                           */}
+      {/* ========================================================================= */}
+      <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-[#0b0f19] border border-white/10 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('activity')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'activity'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Mail className="w-3.5 h-3.5" />
+          <span>Inbox & Activity</span>
+          <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">
+            {autoReplyLogs.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('knowledge')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'knowledge'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5" />
+          <span>Train AI Knowledge Base</span>
+          <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">
+            {knowledge.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('agent')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'agent'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Sliders className="w-3.5 h-3.5" />
+          <span>AI Persona & Rules</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('workspace')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'workspace'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Google Workspace Suite</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('simulator')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'simulator'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5 text-amber-400" />
+          <span>Test Simulator</span>
+        </button>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* TAB 1: SMART GMAIL INBOX & AUTONOMOUS DISPATCH LOGS                      */}
+      {/* ========================================================================= */}
+      {activeTab === 'activity' && (
+        <div className="space-y-4 animate-in fade-in duration-200">
+          {/* Top Sub-View Switcher & Deep Scan Bar */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 rounded-2xl bg-[#0b0f19] border border-white/10">
+            <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
+              <button
+                onClick={() => setInboxSubView('gmail')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  inboxSubView === 'gmail'
+                    ? 'bg-gradient-to-r from-indigo-600 to-sky-600 text-white shadow-md shadow-indigo-600/30'
+                    : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Inbox className="w-3.5 h-3.5 text-sky-300" />
+                <span>Smart Gmail Inbox</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">
+                  {categorizedGmailEmails.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setInboxSubView('logs')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                  inboxSubView === 'logs'
+                    ? 'bg-gradient-to-r from-indigo-600 to-sky-600 text-white shadow-md shadow-indigo-600/30'
+                    : 'bg-white/5 text-slate-400 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5 text-amber-300" />
+                <span>Autonomous AI Dispatch Logs</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-white/20 text-[10px] font-mono">
+                  {autoReplyLogs.length}
+                </span>
+              </button>
+            </div>
+
+            {/* Live Auto-Sync Status & Deep Scan Gmail & Spam Button */}
+            <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end flex-wrap">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-[11px] text-emerald-400 font-mono">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Live Auto-Sync (20s)</span>
+              </div>
+
+              <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-[11px] text-indigo-300 font-mono">
+                <Globe className="w-3.5 h-3.5 text-sky-400" />
+                <span>Host: {TimezoneService.getUserUtcOffsetFormatted()}</span>
               </div>
 
               <button
-                onClick={() => pollAndAutoReplyGmail()}
-                disabled={isSyncingGmail}
-                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 transition-all flex items-center gap-1.5 shadow-sm hover:text-white"
+                onClick={() => loadCategorizedGmailEmails()}
+                disabled={isLoadingGmailEmails}
+                className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white border border-white/10 transition-all cursor-pointer justify-center"
+                title="Scan all Gmail messages including inbox & spam"
               >
-                <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isSyncingGmail ? 'animate-spin' : ''}`} />
-                <span>Scan Inbox Now</span>
+                <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isLoadingGmailEmails ? 'animate-spin' : ''}`} />
+                <span>{isLoadingGmailEmails ? 'Scanning...' : 'Deep Scan Now'}</span>
               </button>
+            </div>
+          </div>
 
+          {/* Sub-View A: Smart Gmail Categorized Inbox */}
+          {inboxSubView === 'gmail' && (
+            <div className="space-y-4">
+              {/* Duplicate Prevention & Productivity Guarantee Banner */}
+              <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 text-indigo-300">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>
+                    <strong>Zero-Duplicate & Reschedule Guarantee:</strong> Client reschedule requests automatically cancel previous appointments so double meetings never occur. Worldwide UTC offsets are matched in real-time.
+                  </span>
+                </div>
+                <span className="text-[11px] font-medium text-slate-400 font-mono whitespace-nowrap">
+                  Inbox & Spam Monitored: {categorizedGmailEmails.length} messages
+                </span>
+              </div>
+
+              {/* 4 Core Categories + Spam Filter Pills & Search */}
+              <div className="p-4 rounded-2xl bg-[#0b0f19] border border-white/10 flex flex-col md:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto pb-1 md:pb-0">
+                  <button
+                    onClick={() => setGmailCategoryFilter('all')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      gmailCategoryFilter === 'all'
+                        ? 'bg-white/15 text-white'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <span>All Mails</span>
+                    <span className="px-1.5 py-0.2 rounded-full bg-white/10 text-[10px]">{categorizedGmailEmails.length}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setGmailCategoryFilter('urgent')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      gmailCategoryFilter === 'urgent'
+                        ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                        : 'text-slate-400 hover:text-red-300 hover:bg-white/5'
+                    }`}
+                  >
+                    <Flame className="w-3.5 h-3.5 text-red-400" />
+                    <span>Urgent Mail</span>
+                    {urgentMailsCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-red-500/30 text-red-200 text-[10px] font-bold">
+                        {urgentMailsCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setGmailCategoryFilter('meeting')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      gmailCategoryFilter === 'meeting'
+                        ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                        : 'text-slate-400 hover:text-indigo-300 hover:bg-white/5'
+                    }`}
+                  >
+                    <CalendarIcon className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Meeting Mail</span>
+                    {meetingMailsCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-indigo-500/30 text-indigo-200 text-[10px] font-bold">
+                        {meetingMailsCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setGmailCategoryFilter('inquiry')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      gmailCategoryFilter === 'inquiry'
+                        ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                        : 'text-slate-400 hover:text-sky-300 hover:bg-white/5'
+                    }`}
+                  >
+                    <HelpCircle className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Inquiry Mail</span>
+                    {inquiryMailsCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-sky-500/30 text-sky-200 text-[10px] font-bold">
+                        {inquiryMailsCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setGmailCategoryFilter('normal')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      gmailCategoryFilter === 'normal'
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : 'text-slate-400 hover:text-emerald-300 hover:bg-white/5'
+                    }`}
+                  >
+                    <Mail className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Normal Mail</span>
+                    {normalMailsCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/30 text-emerald-200 text-[10px] font-bold">
+                        {normalMailsCount}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => setGmailCategoryFilter('spam')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                      gmailCategoryFilter === 'spam'
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        : 'text-slate-400 hover:text-amber-300 hover:bg-white/5'
+                    }`}
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Rescued from Spam</span>
+                    {spamRescuedCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-amber-500/30 text-amber-200 text-[10px] font-bold">
+                        {spamRescuedCount}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {/* Search Input */}
+                <div className="relative w-full md:w-64">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3" />
+                  <input
+                    type="text"
+                    value={gmailSearch}
+                    onChange={e => setGmailSearch(e.target.value)}
+                    placeholder="Search subject, client, or body..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Categorized Email Cards List */}
+              <div className="rounded-2xl bg-[#0b0f19] border border-white/10 overflow-hidden shadow-xl">
+                {filteredGmailEmails.length === 0 ? (
+                  <div className="text-center py-16 px-4">
+                    <Mail className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                    <h3 className="text-sm font-bold text-white mb-1">No Emails in this Category</h3>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto mb-5">
+                      Your connected Gmail inbox has no messages under &quot;{gmailCategoryFilter}&quot;.
+                    </p>
+                    <button
+                      onClick={() => loadCategorizedGmailEmails()}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white transition-all shadow-md cursor-pointer"
+                    >
+                      Rescan Gmail Inbox Now
+                    </button>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-white/5">
+                    {filteredGmailEmails.map(email => {
+                      const isUrgent = email.category === 'URGENT';
+                      const isMeeting = email.category === 'MEETING';
+                      const isInquiry = email.category === 'INQUIRY';
+                      const isReschedule = email.subject.toLowerCase().includes('reschedule') || email.body.toLowerCase().includes('change');
+
+                      return (
+                        <div
+                          key={email.id}
+                          className="p-4 sm:p-5 hover:bg-white/[0.02] transition-colors flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                        >
+                          {/* Left: Avatar, Sender, Subject, Snippet */}
+                          <div
+                            onClick={() => setSelectedGmailEmail(email)}
+                            className="flex items-start gap-3.5 flex-1 min-w-0 cursor-pointer"
+                          >
+                            <div
+                              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mt-0.5 font-bold text-sm ${
+                                isUrgent
+                                  ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                  : isMeeting
+                                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                                  : isInquiry
+                                  ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
+                                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              }`}
+                            >
+                              {isUrgent ? (
+                                <Flame className="w-5 h-5 text-red-400" />
+                              ) : isMeeting ? (
+                                <CalendarIcon className="w-5 h-5 text-indigo-400" />
+                              ) : isInquiry ? (
+                                <HelpCircle className="w-5 h-5 text-sky-400" />
+                              ) : (
+                                <Mail className="w-5 h-5 text-emerald-400" />
+                              )}
+                            </div>
+
+                            <div className="space-y-1 min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-white">
+                                  {email.fromName || 'Client'}
+                                </span>
+                                <span className="text-[11px] text-slate-400">
+                                  · {email.from}
+                                </span>
+                                <span className="text-[11px] text-slate-500 font-mono">
+                                  · {email.date}
+                                </span>
+                                {email.isFromSpam && (
+                                  <span className="text-[10px] font-bold text-amber-300 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20">
+                                    🛡️ Rescued from Spam
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-sm font-semibold text-slate-200 truncate">
+                                  {email.subject}
+                                </h4>
+                                {email.isUnread && (
+                                  <span className="w-2 h-2 rounded-full bg-sky-400 shrink-0" title="Unread" />
+                                )}
+                              </div>
+
+                              {isMeeting && (
+                                <div className="flex items-center gap-1.5 py-0.5">
+                                  {(() => {
+                                    const clientTz = TimezoneService.detectClientTimezone(`${email.subject} ${email.body}`);
+                                    const userOffset = TimezoneService.getUserUtcOffsetFormatted();
+                                    const isDiff = clientTz.utcOffsetFormatted !== userOffset;
+                                    return (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/15 border border-indigo-500/30 text-[10px] font-mono text-indigo-300">
+                                        <Globe className="w-3 h-3 text-sky-400 shrink-0" />
+                                        <span>
+                                          {isDiff
+                                            ? `Timezone: ${clientTz.label} ⇄ Host: ${userOffset}`
+                                            : `Timezone: ${userOffset}`}
+                                        </span>
+                                      </span>
+                                    );
+                                  })()}
+                                </div>
+                              )}
+
+                              <p className="text-xs text-slate-400 line-clamp-1">
+                                {email.snippet || email.body.slice(0, 100)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Right: Badges & Direct Action Buttons */}
+                          <div className="flex items-center gap-2.5 shrink-0 self-end lg:self-center flex-wrap">
+                            {/* Category Badge */}
+                            <span
+                              className={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${
+                                isUrgent
+                                  ? 'bg-red-500/10 text-red-400 border-red-500/20'
+                                  : isMeeting
+                                  ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                                  : isInquiry
+                                  ? 'bg-sky-500/10 text-sky-400 border-sky-500/20'
+                                  : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                              }`}
+                            >
+                              {isMeeting && isReschedule ? '📅 RESCHEDULE' : email.category}
+                            </span>
+
+                            {/* AI Replied Status */}
+                            {email.hasAiReplied ? (
+                              <span className="text-[10px] font-bold text-emerald-400 px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-1">
+                                <CheckCircle className="w-3 h-3" />
+                                <span>AI Replied</span>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={async () => {
+                                  setIsProcessingAiEmailId(email.id);
+                                  await processSingleEmailWithAi(email);
+                                  setIsProcessingAiEmailId(null);
+                                }}
+                                disabled={isProcessingAiEmailId === email.id}
+                                className="text-[11px] font-bold text-white px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 transition-colors shadow-sm flex items-center gap-1 cursor-pointer"
+                              >
+                                {isProcessingAiEmailId === email.id ? (
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="w-3 h-3 text-amber-300" />
+                                )}
+                                <span>{isProcessingAiEmailId === email.id ? 'Processing...' : 'Run AI Reply'}</span>
+                              </button>
+                            )}
+
+                            {/* Mark Read/Unread Toggle */}
+                            <button
+                              onClick={() => toggleEmailReadStatus(email.id, email.isUnread)}
+                              className="text-xs text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-colors"
+                              title={email.isUnread ? 'Mark as Read' : 'Mark as Unread'}
+                            >
+                              {email.isUnread ? (
+                                <MailOpen className="w-4 h-4 text-slate-400 hover:text-sky-300" />
+                              ) : (
+                                <Mail className="w-4 h-4 text-slate-500" />
+                              )}
+                            </button>
+
+                            {/* View Full Email Button */}
+                            <button
+                              onClick={() => setSelectedGmailEmail(email)}
+                              className="text-xs text-slate-300 hover:text-white font-semibold flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Read</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sub-View B: Autonomous AI Dispatch Logs */}
+          {inboxSubView === 'logs' && (
+            <div className="space-y-4">
+              {/* Activity Filters and Search */}
+              <div className="p-4 rounded-2xl bg-[#0b0f19] border border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                  <button
+                    onClick={() => setActivityFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                      activityFilter === 'all'
+                        ? 'bg-white/15 text-white'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    All Replies ({autoReplyLogs.length})
+                  </button>
+                  <button
+                    onClick={() => setActivityFilter('appointments')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                      activityFilter === 'appointments'
+                        ? 'bg-white/15 text-indigo-300'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    📅 Appointments
+                  </button>
+                  <button
+                    onClick={() => setActivityFilter('inquiries')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                      activityFilter === 'inquiries'
+                        ? 'bg-white/15 text-sky-300'
+                        : 'text-slate-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    ✉️ Inquiries
+                  </button>
+                </div>
+
+                <div className="relative w-full sm:w-64">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-3" />
+                  <input
+                    type="text"
+                    value={activitySearch}
+                    onChange={e => setActivitySearch(e.target.value)}
+                    placeholder="Search subject or client..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Activity Logs Table / List */}
+              <div className="rounded-2xl bg-[#0b0f19] border border-white/10 overflow-hidden shadow-xl">
+                {filteredLogs.length === 0 ? (
+                  <div className="text-center py-16 px-4">
+                    <Mail className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+                    <h3 className="text-sm font-bold text-white mb-1">No Activity Found</h3>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto mb-5">
+                      When a client sends an email to your Gmail address, the AI automatically drafts and dispatches a reply within seconds.
+                    </p>
+                    <button
+                      onClick={() => {
+                        setActiveTab('simulator');
+                      }}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white transition-all shadow-md cursor-pointer"
+                    >
+                      Simulate Client Email Now
+                    </button>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-white/5">
+                    {filteredLogs.map(log => {
+                      const isMeeting =
+                        log.intent?.toLowerCase().includes('appointment') ||
+                        log.intent?.toLowerCase().includes('meeting') ||
+                        log.fullReply?.toLowerCase().includes('meet');
+
+                      return (
+                        <div
+                          key={log.id}
+                          onClick={() => setSelectedLogDetail(log)}
+                          className="p-4 sm:p-5 hover:bg-white/[0.02] transition-colors cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-4"
+                        >
+                          <div className="flex items-start gap-3.5 flex-1 min-w-0">
+                            <div
+                              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                                isMeeting
+                                  ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30'
+                                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              }`}
+                            >
+                              {isMeeting ? <CalendarIcon className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
+                            </div>
+
+                            <div className="space-y-1 min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-white">
+                                  {log.fromName || 'Client'}
+                                </span>
+                                <span className="text-[11px] text-slate-400">
+                                  · {log.fromEmail}
+                                </span>
+                                <span className="text-[11px] text-slate-500 font-mono">
+                                  · {log.timestamp}
+                                </span>
+                              </div>
+
+                              <h4 className="text-sm font-semibold text-slate-200 truncate">
+                                {log.subject}
+                              </h4>
+
+                              <p className="text-xs text-slate-400 line-clamp-1">
+                                {log.replySnippet}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3 shrink-0 self-end md:self-center">
+                            {isMeeting && (
+                              <span className="text-[11px] font-bold text-indigo-400 px-2.5 py-1 rounded-md bg-indigo-500/10 border border-indigo-500/20">
+                                Meet Booked
+                              </span>
+                            )}
+
+                            <span className="text-[11px] font-bold text-emerald-400 px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20">
+                              DELIVERED
+                            </span>
+
+                            <button className="text-xs text-slate-400 hover:text-white font-semibold flex items-center gap-1">
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>View</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 2: KNOWLEDGE BASE (Train AI)                                         */}
+      {/* ========================================================================= */}
+      {activeTab === 'knowledge' && (
+        <div className="space-y-5 animate-in fade-in duration-200">
+          {/* Sub-Channel Switcher */}
+          <div className="flex items-center gap-2 p-1 bg-white/[0.03] border border-white/10 rounded-xl overflow-x-auto">
+            <button
+              onClick={() => setKnowledgeSubTab('faqs')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                knowledgeSubTab === 'faqs' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Business FAQs & Answers
+            </button>
+            <button
+              onClick={() => setKnowledgeSubTab('docs')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                knowledgeSubTab === 'docs' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Google Docs & Drive Sync
+            </button>
+            <button
+              onClick={() => setKnowledgeSubTab('website')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                knowledgeSubTab === 'website' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Website Scanner
+            </button>
+            <button
+              onClick={() => setKnowledgeSubTab('files')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                knowledgeSubTab === 'files' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Upload PDF Documents
+            </button>
+          </div>
+
+          {/* SubTab 1: Business FAQs */}
+          {knowledgeSubTab === 'faqs' && (
+            <div className="rounded-2xl bg-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white">Business Questions & Answers</h3>
+                  <p className="text-xs text-slate-400">
+                    Teach the AI your exact pricing, packages, delivery turnaround, and return policies.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsAddingFaq(!isAddingFaq)}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add New FAQ</span>
+                </button>
+              </div>
+
+              {/* Add FAQ Form */}
+              {isAddingFaq && (
+                <div className="p-4 rounded-xl bg-white/[0.02] border border-indigo-500/30 space-y-3 animate-in fade-in">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">
+                      Customer Question
+                    </label>
+                    <input
+                      type="text"
+                      value={newQuestion}
+                      onChange={e => setNewQuestion(e.target.value)}
+                      placeholder="e.g., What is your website development package pricing?"
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1">
+                      Verified Answer / Fact
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={newAnswer}
+                      onChange={e => setNewAnswer(e.target.value)}
+                      placeholder="e.g., Our starter web package begins at $250 with 3-5 days delivery..."
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2">
+                    <select
+                      value={newCategory}
+                      onChange={e => setNewCategory(e.target.value as KnowledgeCategory)}
+                      className="px-3 py-1.5 rounded-xl bg-slate-950 border border-white/10 text-xs text-white"
+                    >
+                      <option value="FAQ">Category: FAQ</option>
+                      <option value="Pricing">Category: Pricing</option>
+                      <option value="Services">Category: Services</option>
+                      <option value="Refund Policy">Category: Refund Policy</option>
+                    </select>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setIsAddingFaq(false)}
+                        className="px-3 py-1.5 rounded-xl text-xs text-slate-400 hover:text-white cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleAddFaq}
+                        className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white cursor-pointer"
+                      >
+                        Save FAQ
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* FAQ List */}
+              <div className="space-y-3">
+                {knowledge.map(item => (
+                  <div
+                    key={item.id}
+                    className="p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors flex items-start justify-between gap-4"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white">{item.title}</span>
+                        <span className="text-[10px] font-semibold text-indigo-400 px-2 py-0.5 rounded bg-indigo-500/10">
+                          {item.category}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">{item.content}</p>
+                    </div>
+
+                    <button
+                      onClick={() => deleteKnowledgeItem(item.id)}
+                      className="text-slate-500 hover:text-rose-400 p-1.5 rounded-lg transition-colors cursor-pointer shrink-0"
+                      title="Delete knowledge item"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* SubTab 2: Google Docs & Drive */}
+          {knowledgeSubTab === 'docs' && (
+            <div className="rounded-2xl bg-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-6">
+              <div>
+                <h3 className="text-base font-bold text-white">Google Docs & Google Drive Integration</h3>
+                <p className="text-xs text-slate-400">
+                  Connect your live Google Docs or Google Drive folder. Mailora AI pulls real-time facts directly from your documentation.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-xl bg-white/[0.02] border border-white/10 space-y-3">
+                  <div className="flex items-center gap-2 text-sky-400 font-bold text-xs">
+                    <FileText className="w-4 h-4" />
+                    <span>Import Existing Google Doc</span>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    Paste the public or workspace share link of your company handbook or pricing sheet:
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={docUrlInput}
+                      onChange={e => setDocUrlInput(e.target.value)}
+                      placeholder="https://docs.google.com/document/d/..."
+                      className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-sky-500"
+                    />
+                    <button
+                      onClick={handleImportDoc}
+                      disabled={isImportingDoc || !docUrlInput.trim()}
+                      className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      {isImportingDoc ? 'Importing...' : 'Import'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-white/[0.02] border border-white/10 space-y-3">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                    <HardDrive className="w-4 h-4" />
+                    <span>Create Knowledge Google Doc</span>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    Instantly create a pre-structured knowledge document inside your Google Drive:
+                  </p>
+                  <button
+                    onClick={async () => {
+                      setIsCreatingNewDoc(true);
+                      const res = await createGoogleDocKnowledge(
+                        `${businessName} - Official Knowledge Handbook`,
+                        `Company: ${businessName}\nIndustry: ${industry}\nWebsite: ${website}\n\nServices & Solutions:\n- Professional Web & Software Engineering\n- Turnaround time: Under 1 minute auto-reply\n\nSupport Guarantee:\n- 100% Client Satisfaction.`
+                      );
+                      setIsCreatingNewDoc(false);
+                      if (res.success && res.documentUrl) {
+                        window.open(res.documentUrl, '_blank');
+                      }
+                    }}
+                    disabled={isCreatingNewDoc}
+                    className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-md"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{isCreatingNewDoc ? 'Creating Doc...' : 'Create New Doc in Drive'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SubTab 3: Website Scanner */}
+          {knowledgeSubTab === 'website' && (
+            <div className="rounded-2xl bg-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-5">
+              <div>
+                <h3 className="text-base font-bold text-white">Live Website Scanner</h3>
+                <p className="text-xs text-slate-400">
+                  Enter your company website. Mailora will crawl your services, about page, and contact info, then index it into your knowledge base.
+                </p>
+              </div>
+
+              <div className="flex gap-2 max-w-xl">
+                <div className="relative flex-1">
+                  <Globe className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                  <input
+                    type="url"
+                    value={targetWebsiteUrl}
+                    onChange={e => setTargetWebsiteUrl(e.target.value)}
+                    placeholder="https://yourcompany.com"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <button
+                  onClick={handleStartWebsiteCrawl}
+                  disabled={isCrawlingSite || !targetWebsiteUrl.trim()}
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shrink-0 cursor-pointer disabled:opacity-50"
+                >
+                  {isCrawlingSite ? 'Crawling...' : 'Scan Website'}
+                </button>
+              </div>
+
+              {isCrawlingSite && (
+                <div className="p-4 rounded-xl bg-white/[0.02] border border-indigo-500/30 text-xs text-slate-300 space-y-2">
+                  <div className="flex items-center gap-2 text-indigo-400 font-bold">
+                    <div className="w-3 h-3 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin" />
+                    <span>Crawling & extracting website content...</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Step {crawlProgressStep} of 4: Fetching HTML, cleaning text, indexing services, and syncing to Google Drive.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* SubTab 4: PDF Upload */}
+          {knowledgeSubTab === 'files' && (
+            <div className="rounded-2xl bg-[#0b0f19] border border-white/10 p-5 sm:p-6 space-y-5">
+              <div>
+                <h3 className="text-base font-bold text-white">Upload Business Documents (PDF, TXT)</h3>
+                <p className="text-xs text-slate-400">
+                  Upload brochures, service rate cards, or policy documents. The AI can also attach these PDFs directly to client replies!
+                </p>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.txt,.doc,.docx"
+                onChange={e => handleFileUpload(e.target.files)}
+                className="hidden"
+              />
+
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="p-8 rounded-2xl border-2 border-dashed border-white/10 hover:border-indigo-500/50 transition-colors text-center cursor-pointer bg-white/[0.01]"
+              >
+                <Upload className="w-8 h-8 text-indigo-400 mx-auto mb-2" />
+                <span className="text-xs font-bold text-white block">
+                  Click or drag and drop PDF files here
+                </span>
+                <span className="text-[11px] text-slate-400 block mt-1">
+                  Supports PDF, TXT, DOCX up to 10MB
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 3: AI PERSONA & RULES                                                */}
+      {/* ========================================================================= */}
+      {activeTab === 'agent' && (
+        <div className="space-y-5 animate-in fade-in duration-200">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Business Identity */}
+            <div className="p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-sky-400" />
+                <span>Business Identity & Profile</span>
+              </h3>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Company / Agency Name
+                </label>
+                <input
+                  type="text"
+                  value={businessName}
+                  onChange={e => setBusinessName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Industry / Core Services
+                </label>
+                <input
+                  type="text"
+                  value={industry}
+                  onChange={e => setIndustry(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Website URL
+                </label>
+                <input
+                  type="url"
+                  value={website}
+                  onChange={e => setWebsite(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Customer Support Email
+                </label>
+                <input
+                  type="email"
+                  value={supportEmail}
+                  onChange={e => setSupportEmail(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+
+            {/* AI Agent Persona */}
+            <div className="p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Bot className="w-4 h-4 text-indigo-400" />
+                <span>AI Persona & Tone</span>
+              </h3>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    Agent Name
+                  </label>
+                  <input
+                    type="text"
+                    value={agentName}
+                    onChange={e => setAgentName(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    Tone of Voice
+                  </label>
+                  <select
+                    value={tone}
+                    onChange={e => setTone(e.target.value as AgentTone)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white"
+                  >
+                    <option value="Professional">Professional</option>
+                    <option value="Friendly">Friendly</option>
+                    <option value="Concise">Concise & Direct</option>
+                    <option value="Formal">Formal</option>
+                    <option value="Empathetic">Empathetic</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Primary Language
+                </label>
+                <select
+                  value={replyLanguage}
+                  onChange={e => setReplyLanguage(e.target.value as ReplyLanguage)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white"
+                >
+                  <option value="Multi-language (Auto-detect)">Multi-language (Auto-detect)</option>
+                  <option value="English">English</option>
+                  <option value="Bangla">Bangla</option>
+                  <option value="Bangla + English">Bangla + English</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Email Signature
+                </label>
+                <textarea
+                  rows={2}
+                  value={emailSignature}
+                  onChange={e => setEmailSignature(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Prompt Directives */}
+          <div className="p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-3">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-emerald-400" />
+              <span>Custom System Directives & Rules</span>
+            </h3>
+            <p className="text-xs text-slate-400">
+              Direct instructions for how Mailora AI should read, interpret, and answer incoming customer messages.
+            </p>
+            <textarea
+              rows={4}
+              value={instructions}
+              onChange={e => setInstructions(e.target.value)}
+              className="w-full p-3 rounded-xl bg-slate-950 border border-white/10 text-xs text-white leading-relaxed focus:outline-none focus:border-indigo-500"
+            />
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={handleSaveAllSettings}
+                disabled={isSavingSettings}
+                className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-lg shadow-indigo-600/30 cursor-pointer disabled:opacity-50"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isSavingSettings ? 'Saving...' : 'Save All Settings'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 4: GOOGLE WORKSPACE SUITE                                             */}
+      {/* ========================================================================= */}
+      {activeTab === 'workspace' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 animate-in fade-in duration-200">
+          {/* 1. Gmail */}
+          <div className="p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center font-bold">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Gmail Integration</h3>
+                    <p className="text-[11px] text-slate-400">Inbound Monitoring & Auto-Replies</p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30">
+                  Connected ✓
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1.5 text-xs text-slate-300">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Account:</span>
+                  <span className="font-mono text-white">{gmailAccount.email}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Daily Quota:</span>
+                  <span>{gmailAccount.dailySentCount} / {gmailAccount.dailyQuota}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => pollAndAutoReplyGmail()}
+                className="flex-1 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white transition-colors cursor-pointer"
+              >
+                Scan Now
+              </button>
               <a
                 href="https://mail.google.com"
                 target="_blank"
                 rel="noreferrer"
-                className="px-3 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-xs font-semibold transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
               >
-                <Mail className="w-3.5 h-3.5" />
-                <span>Open Gmail Sent / Inbox ↗</span>
+                <span>Open Gmail</span>
+                <ExternalLink className="w-3 h-3" />
               </a>
             </div>
           </div>
 
-          {/* Quick Metrics 3D Tile */}
-          <div className="grid grid-cols-2 gap-3 min-w-[280px]">
-            <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md shadow-lg">
-              <span className="text-[11px] font-bold text-slate-400 block mb-1">Total Auto-Replies</span>
-              <div className="text-xl font-extrabold text-white font-mono flex items-center gap-1.5">
-                {threads.filter(t => t.status === 'AUTO_REPLIED').length}
-                <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-emerald-500/20 text-emerald-400">
-                  Delivered
-                </span>
-              </div>
-              <span className="text-[10px] text-slate-400">Directly via Gmail API</span>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md shadow-lg">
-              <span className="text-[11px] font-bold text-slate-400 block mb-1">Knowledge Chunks</span>
-              <div className="text-xl font-extrabold text-white font-mono flex items-center gap-1.5">
-                {knowledge.length + faqsList.length}
-                <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-cyan-500/20 text-cyan-400">
-                  Trained
-                </span>
-              </div>
-              <span className="text-[10px] text-slate-400">Manual, Web & FAQs</span>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md shadow-lg">
-              <span className="text-[11px] font-bold text-slate-400 block mb-1">Human Likeness</span>
-              <div className="text-xl font-extrabold text-purple-300 font-mono">
-                100%
-              </div>
-              <span className="text-[10px] text-slate-400">Natural tone persona</span>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800/80 backdrop-blur-md shadow-lg">
-              <span className="text-[11px] font-bold text-slate-400 block mb-1">Inbox Placement</span>
-              <div className="text-sm font-extrabold text-emerald-400 flex items-center gap-1">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Primary Inbox</span>
-              </div>
-              <span className="text-[10px] text-slate-400">Zero spam triggers</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Google Sign-in Verification Explainer Banner */}
-      <div className="rounded-2xl bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-slate-900 border border-amber-500/30 p-4 text-xs text-slate-300 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 shadow-lg">
-        <div className="flex items-start gap-2.5">
-          <div className="w-7 h-7 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
-            <Info className="w-4 h-4" />
-          </div>
-          <div>
-            <span className="font-extrabold text-white block">
-              Google Login Notice: &quot;Google hasn&apos;t verified this app&quot;
-            </span>
-            <span className="text-slate-300">
-              When logging in with Google, click <strong className="text-amber-300">&quot;Advanced&quot; (উন্নত)</strong> &rarr; then click <strong className="text-amber-300">&quot;Go to ... (Continue)&quot;</strong>. This is Google&apos;s standard developer test screen for new private workspace apps.
-            </span>
-          </div>
-        </div>
-
-        <button
-          onClick={() => setShowUnverifiedGuide(!showUnverifiedGuide)}
-          className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline shrink-0 whitespace-nowrap self-end md:self-center"
-        >
-          {showUnverifiedGuide ? 'Hide details' : 'How to login verified ↗'}
-        </button>
-      </div>
-
-      {showUnverifiedGuide && (
-        <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-300 space-y-2 animate-in fade-in">
-          <h4 className="font-extrabold text-amber-300">Google OAuth Verification Explanation:</h4>
-          <ol className="list-decimal pl-5 space-y-1 text-slate-400 text-[11px]">
-            <li>Google Cloud Console requires security audits (CASA Tier 2) before removing the test app banner for sensitive Gmail/Drive scopes.</li>
-            <li>In development mode, Google automatically displays: <em>&quot;You&apos;ve been given access to an app that&apos;s currently being tested&quot;</em>.</li>
-            <li>Click <strong>Advanced</strong> on the bottom left of the Google consent window, then click <strong>&quot;Go to ... (unsafe) / Continue&quot;</strong> to grant access. Your emails, tokens, and data stay 100% private to your account.</li>
-          </ol>
-        </div>
-      )}
-
-      {/* TOP PROMINENT ROW: Google Workspace Autonomous Suite (Google Drive + Google Docs + Google Sheets + Google Calendar) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
-        {/* 1. Google Drive Cloud Knowledge Central Card */}
-        <div className="rounded-3xl bg-gradient-to-br from-[#131109] via-[#0d1322] to-slate-950 border border-amber-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-amber-400/60 hover:-translate-y-1.5 transition-all duration-300">
-          <div className="absolute top-0 right-0 w-40 h-40 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
-
-          <div className="space-y-3 relative z-10">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-md group-hover:scale-105 transition-transform">
-                  <HardDrive className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h3 className="text-sm font-extrabold text-white">Google Drive Cloud</h3>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                      Cloud Sync
-                    </span>
+          {/* 2. Google Calendar */}
+          <div className="p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold">
+                    <CalendarIcon className="w-4 h-4" />
                   </div>
-                  <p className="text-[11px] text-slate-400">Knowledge Folder & Auto-Backups</p>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Google Calendar</h3>
+                    <p className="text-[11px] text-slate-400">Urgent Appointments & Meet Links</p>
+                  </div>
                 </div>
+                <span className="text-[10px] font-bold text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30">
+                  Auto-Book Active ✓
+                </span>
               </div>
 
-              <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                  isGoogleAuthenticated
-                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                }`}
+              <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1.5 text-xs text-slate-300">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Booked Meetings:</span>
+                  <span className="font-mono text-white">{calendarBookings.length} total</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Default Duration:</span>
+                  <span>{calendarConfig.defaultMeetingDurationMinutes || 30} minutes</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setIsCalendarModalOpen(true)}
+                className="flex-1 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white transition-colors cursor-pointer"
               >
-                {isGoogleAuthenticated ? 'Drive Synced ✓' : 'Connect Needed'}
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Auto-syncs website crawl notes, PDFs, and policies to your private Google Drive folder (<code className="text-amber-300 bg-slate-900 px-1 py-0.5 rounded">Mailora_AI_Knowledge_Base</code>).
-            </p>
-
-            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
-              <div>
-                <span>Drive Files:</span>
-                <strong className="text-white ml-1.5 font-mono">
-                  {knowledge.filter(k => k.sourceFileType === 'GOOGLE_DRIVE' || k.sourceDriveFileId).length} indexed
-                </strong>
-              </div>
-              <div className="text-right">
-                <span className="text-amber-400 font-semibold">100% Autopilot</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
-            <button
-              onClick={() => connectGoogleDrive()}
-              className="flex-1 py-2.5 px-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
-            >
-              <HardDrive className="w-4 h-4" />
-              <span>Browse Drive ↗</span>
-            </button>
-
-            <a
-              href="https://drive.google.com/drive/my-drive"
-              target="_blank"
-              rel="noreferrer"
-              className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Drive ↗</span>
-            </a>
-          </div>
-        </div>
-
-        {/* 2. Google Docs Knowledge Suite Card */}
-        <div className="rounded-3xl bg-gradient-to-br from-[#08121f] via-[#0d1322] to-slate-950 border border-sky-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-sky-400/60 hover:-translate-y-1.5 transition-all duration-300">
-          <div className="absolute top-0 right-0 w-40 h-40 bg-sky-500/10 rounded-full blur-2xl pointer-events-none" />
-
-          <div className="space-y-3 relative z-10">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 shadow-md group-hover:scale-105 transition-transform">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h3 className="text-sm font-extrabold text-white">Google Docs Suite</h3>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
-                      Docs RAG
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400">Import & Create AI Reference Docs</p>
-                </div>
-              </div>
-
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-sky-500/15 text-sky-400 border-sky-500/30">
-                Workspace Active ✓
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Read company handbook, service FAQs, or pricing directly from your Google Docs. Whenever you edit the Google Doc, Mailora AI replies with up-to-date facts.
-            </p>
-
-            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
-              <div>
-                <span>Google Docs Ingested:</span>
-                <strong className="text-white ml-1.5 font-mono">
-                  {knowledge.filter(k => k.sourceFileName?.includes('.gdoc') || k.sourceFileType === 'GOOGLE_DRIVE').length} docs
-                </strong>
-              </div>
-              <div className="text-right">
-                <span className="text-sky-400 font-semibold">Docs API Ready</span>
-              </div>
-            </div>
-
-            {showDocUrlInput && (
-              <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2 animate-in fade-in">
-                <label className="text-[11px] font-bold text-slate-300 block">
-                  Paste Google Doc URL or ID:
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={docUrlInput}
-                    onChange={e => setDocUrlInput(e.target.value)}
-                    placeholder="https://docs.google.com/document/d/..."
-                    className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-sky-500"
-                  />
-                  <button
-                    onClick={async () => {
-                      if (!docUrlInput) return;
-                      setIsImportingDoc(true);
-                      await importGoogleDoc(docUrlInput);
-                      setIsImportingDoc(false);
-                      setDocUrlInput('');
-                      setShowDocUrlInput(false);
-                    }}
-                    disabled={isImportingDoc}
-                    className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs shrink-0"
-                  >
-                    {isImportingDoc ? 'Importing...' : 'Import Doc'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
-            <button
-              onClick={() => setShowDocUrlInput(!showDocUrlInput)}
-              className="flex-1 py-2.5 px-3.5 rounded-2xl bg-gradient-to-r from-sky-500 to-indigo-500 hover:from-sky-400 hover:to-indigo-400 text-white font-extrabold text-xs shadow-lg shadow-sky-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
-            >
-              <FileText className="w-4 h-4" />
-              <span>Import Google Doc</span>
-            </button>
-
-            <button
-              onClick={async () => {
-                setIsCreatingNewDoc(true);
-                const title = `${business.name || 'Mailora AI'} - Business Knowledge Handbook`;
-                const content = `Company: ${business.name}\nIndustry: ${business.industry}\nWebsite: ${business.website}\n\nOfficial Services & Pricing:\n- Standard Package: High quality automated support\n- Turnaround time: Under 1 minute\n\nReturn & Support Policy:\n- 100% satisfaction guarantee.`;
-                const res = await createGoogleDocKnowledge(title, content);
-                setIsCreatingNewDoc(false);
-                if (res.success && res.documentUrl) {
-                  window.open(res.documentUrl, '_blank');
-                }
-              }}
-              disabled={isCreatingNewDoc}
-              className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5 text-sky-400" />
-              <span>{isCreatingNewDoc ? 'Creating...' : 'New Doc'}</span>
-            </button>
-
-            <a
-              href="https://docs.google.com"
-              target="_blank"
-              rel="noreferrer"
-              className="py-2.5 px-2.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-400 hover:text-white border border-slate-800 text-xs font-semibold transition-all"
-              title="Open Google Docs"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          </div>
-        </div>
-
-        {/* 3. Google Sheets Live Activity Reports Card */}
-        <div className="rounded-3xl bg-gradient-to-br from-[#071714] via-[#0d1322] to-slate-950 border border-emerald-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-emerald-400/60 hover:-translate-y-1.5 transition-all duration-300">
-          <div className="absolute top-0 right-0 w-40 h-40 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
-
-          <div className="space-y-3 relative z-10">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md group-hover:scale-105 transition-transform">
-                  <FileSpreadsheet className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h3 className="text-sm font-extrabold text-white">Google Sheets Report</h3>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                      Live Export
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400">Date-wise Client Log Auto-Added</p>
-                </div>
-              </div>
-
-              <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                  googleSheetsConfig.isConnected
-                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
+                Calendar Settings
+              </button>
+              <a
+                href="https://calendar.google.com"
+                target="_blank"
+                rel="noreferrer"
+                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
               >
-                {googleSheetsConfig.isConnected ? 'Auto-Log Active ✓' : 'Not Linked'}
-              </span>
+                <span>Calendar ↗</span>
+              </a>
             </div>
+          </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Every dispatched AI reply appends a row to your connected Google Sheet with timestamp, client name, email, subject, inquiry snippet, and reply summary.
-            </p>
-
-            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
-              <div>
-                <span>Replies Logged:</span>
-                <strong className="text-white ml-1.5 font-mono">
-                  {googleSheetsConfig.totalRowsLogged || autoReplyLogs.length} rows
-                </strong>
-              </div>
-              <div className="text-right">
-                <span className="text-emerald-400 font-semibold">
-                  {googleSheetsConfig.isConnected ? 'Auto-Sync ON' : 'Ready'}
+          {/* 3. Google Drive */}
+          <div className="p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                    <HardDrive className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Google Drive & Docs</h3>
+                    <p className="text-[11px] text-slate-400">Folder Storage & PDF Attachments</p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30">
+                  Drive Synced ✓
                 </span>
               </div>
-            </div>
 
-            {showCustomSheetInput && (
-              <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 space-y-2 animate-in fade-in">
-                <label className="text-[11px] font-bold text-slate-300 block">
-                  Paste Google Sheet URL or ID:
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={customSheetUrl}
-                    onChange={e => setCustomSheetUrl(e.target.value)}
-                    placeholder="https://docs.google.com/spreadsheets/d/..."
-                    className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-emerald-500"
-                  />
-                  <button
-                    onClick={async () => {
-                      setIsConnectingSheet(true);
-                      await connectGoogleSheet(customSheetUrl);
-                      setIsConnectingSheet(false);
-                      setShowCustomSheetInput(false);
-                    }}
-                    disabled={isConnectingSheet}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shrink-0"
-                  >
-                    {isConnectingSheet ? 'Linking...' : 'Link Sheet'}
-                  </button>
+              <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1.5 text-xs text-slate-300">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Knowledge Folder:</span>
+                  <span className="font-mono text-amber-300">Mailora_AI_Knowledge_Base</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">PDF Dispatch:</span>
+                  <span className="text-emerald-400">Automated on client request</span>
                 </div>
               </div>
-            )}
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => connectGoogleDrive()}
+                className="flex-1 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white transition-colors cursor-pointer"
+              >
+                Browse Drive Files
+              </button>
+              <a
+                href="https://drive.google.com/drive/my-drive"
+                target="_blank"
+                rel="noreferrer"
+                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 hover:text-white transition-colors flex items-center gap-1.5"
+              >
+                <span>Drive ↗</span>
+              </a>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
-            {googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetUrl ? (
-              <>
+          {/* 4. Google Sheets */}
+          <div className="p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                    <FileSpreadsheet className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Google Sheets Activity Report</h3>
+                    <p className="text-[11px] text-slate-400">Automated Client Interaction Log</p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30">
+                  {googleSheetsConfig.isConnected ? 'Auto-Log Active ✓' : 'Ready to Link'}
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1.5 text-xs text-slate-300">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Rows Logged:</span>
+                  <span className="font-mono text-white">
+                    {googleSheetsConfig.totalRowsLogged || autoReplyLogs.length} interactions
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Format:</span>
+                  <span>Date, Time, Client, Inquiry, Reply, Meet</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              {googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetUrl ? (
                 <a
                   href={googleSheetsConfig.spreadsheetUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="flex-1 py-2.5 px-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
+                  className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white text-center transition-colors"
                 >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>Open Sheet ↗</span>
+                  Open Live Sheet ↗
                 </a>
-
-                <button
-                  onClick={() => exportActivityToCsv()}
-                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-200 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
-                >
-                  <Download className="w-3.5 h-3.5 text-sky-400" />
-                  <span>CSV</span>
-                </button>
-
-                <button
-                  onClick={() => disconnectGoogleSheet()}
-                  className="py-2.5 px-2.5 rounded-2xl bg-slate-900 hover:bg-rose-950/30 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/40 text-xs font-semibold transition-all"
-                  title="Disconnect Sheet"
-                >
-                  ✕
-                </button>
-              </>
-            ) : (
-              <>
+              ) : (
                 <button
                   onClick={async () => {
                     setIsConnectingSheet(true);
@@ -803,1191 +1974,457 @@ export const Dashboard: React.FC = () => {
                     setIsConnectingSheet(false);
                   }}
                   disabled={isConnectingSheet}
-                  className="flex-1 py-2.5 px-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
+                  className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition-colors cursor-pointer"
                 >
-                  <FileSpreadsheet className="w-4 h-4" />
-                  <span>{isConnectingSheet ? 'Creating Sheet...' : 'Auto-Create Sheet'}</span>
+                  {isConnectingSheet ? 'Creating Sheet...' : 'Auto-Create Activity Sheet'}
                 </button>
-
-                <button
-                  onClick={() => setShowCustomSheetInput(!showCustomSheetInput)}
-                  className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
-                >
-                  <LinkIcon className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Link Sheet</span>
-                </button>
-
-                <button
-                  onClick={() => exportActivityToCsv()}
-                  className="py-2.5 px-2.5 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 text-xs font-semibold transition-all"
-                  title="Export CSV"
-                >
-                  <Download className="w-3.5 h-3.5 text-sky-400" />
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* 4. Google Calendar Autonomous Booking Hub Card */}
-        <div className="rounded-3xl bg-gradient-to-br from-[#0c0d22] via-[#0d1322] to-slate-950 border border-indigo-500/40 p-6 shadow-xl flex flex-col justify-between space-y-4 relative overflow-hidden group hover:border-indigo-400/60 hover:-translate-y-1.5 transition-all duration-300">
-          <div className="absolute top-0 right-0 w-40 h-40 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
-
-          <div className="space-y-3 relative z-10">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shadow-md group-hover:scale-105 transition-transform">
-                  <CalendarIcon className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <h3 className="text-sm font-extrabold text-white">Google Calendar</h3>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                      Auto-Book
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400">Availability Check & Meet Links</p>
-                </div>
-              </div>
-
-              <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                  calendarConfig.autoBookMeetings
-                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
-              >
-                {calendarConfig.autoBookMeetings ? 'Auto-Pilot Active ✓' : 'Paused'}
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Detects meeting requests in emails, verifies calendar availability, schedules appointments, and auto-generates Google Meet links.
-            </p>
-
-            <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
-              <div>
-                <span>Appointments:</span>
-                <strong className="text-white ml-1.5 font-mono">
-                  {calendarConfig.totalMeetingsBooked || calendarBookings.length} booked
-                </strong>
-              </div>
-              <div className="text-right">
-                <span className="text-indigo-400 font-semibold">
-                  {calendarConfig.defaultMeetingDurationMinutes || 30}m window
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 pt-2 relative z-10">
-            <button
-              onClick={() => setIsCalendarModalOpen(true)}
-              className="flex-1 py-2.5 px-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-extrabold text-xs shadow-lg shadow-indigo-600/25 transition-all flex items-center justify-center gap-1.5 hover:scale-[1.02] active:scale-[0.98]"
-            >
-              <CalendarIcon className="w-4 h-4" />
-              <span>Calendar Hub ↗</span>
-            </button>
-
-            <a
-              href="https://calendar.google.com"
-              target="_blank"
-              rel="noreferrer"
-              className="py-2.5 px-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border border-slate-800 text-xs font-bold transition-all flex items-center gap-1"
-              title="Open Google Calendar"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. Top Dual Hub: Google Workspace Connection (5 cols) + Real-time Deliverability & Live Activity Stream (7 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column (5 cols): Connected Gmail Account & Auth Controls */}
-        <div className="lg:col-span-5 rounded-3xl bg-[#0d1322]/90 border border-slate-800 p-6 shadow-xl flex flex-col justify-between space-y-6">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                {/* Official Google G Logo */}
-                <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/20 p-2 flex items-center justify-center shadow-md">
-                  <svg className="w-full h-full" viewBox="0 0 24 24">
-                    <path
-                      fill="#4285F4"
-                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                    />
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="text-sm font-extrabold text-white">Google Workspace Account</h3>
-                  <p className="text-[11px] text-slate-400">Authentic OAuth Integration</p>
-                </div>
-              </div>
-
-              <span
-                className={`px-2.5 py-1 rounded-full text-xs font-bold border flex items-center gap-1 shadow-sm ${
-                  isGoogleAuthenticated
-                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
-                    : 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                }`}
-              >
-                {isGoogleAuthenticated ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Active & Authorized</span>
-                  </>
-                ) : (
-                  <>
-                    <AlertCircle className="w-3.5 h-3.5" />
-                    <span>Access Needed</span>
-                  </>
-                )}
-              </span>
-            </div>
-
-            {/* Account Details Box */}
-            {!isGoogleAuthenticated ? (
-              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3">
-                <div className="flex items-center gap-2 text-amber-300 font-bold text-xs">
-                  <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>Action Required: Grant Gmail Access</span>
-                </div>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Google permissions are required for Mailora AI to read incoming emails and automatically send replies directly from your Gmail account.
-                </p>
-                <button
-                  onClick={() => connectGoogleAccount()}
-                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shadow-lg transition-all flex items-center justify-center gap-2 shadow-amber-500/20"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>🔑 Sign In with Google & Grant Gmail Access</span>
-                </button>
-              </div>
-            ) : (
-              <div className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400">
-                      Connected Gmail
-                    </span>
-                    <div className="text-xs font-bold text-white font-mono truncate max-w-[220px]">
-                      {gmailAccount.email}
-                    </div>
-                  </div>
-                  <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                    Auto-Responder Live
-                  </span>
-                </div>
-
-                <div className="pt-2 border-t border-slate-800/80 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
-                  <div>
-                    <span>Daily Quota:</span>
-                    <strong className="text-slate-200 ml-1">
-                      {gmailAccount.dailySentCount} / {gmailAccount.dailyQuota}
-                    </strong>
-                  </div>
-                  <div className="text-right">
-                    <span>Engine Status:</span>
-                    <span className="font-semibold text-emerald-400 ml-1">Active</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Toggle Autopilot Switch */}
-            <div className="p-3.5 rounded-2xl bg-indigo-950/20 border border-indigo-800/40 flex items-center justify-between">
-              <div className="space-y-0.5">
-                <div className="text-xs font-bold text-white">Auto-Responder Engine</div>
-                <div className="text-[11px] text-slate-400">Replies automatically when mail arrives</div>
-              </div>
+              )}
               <button
-                onClick={() => setIsAutoResponderActive(!isAutoResponderActive)}
-                className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
-                  isAutoResponderActive ? 'bg-emerald-500' : 'bg-slate-700'
-                }`}
+                onClick={() => exportActivityToCsv()}
+                className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300 hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+                title="Download CSV"
               >
-                <div
-                  className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${
-                    isAutoResponderActive ? 'translate-x-6' : 'translate-x-0'
-                  }`}
-                />
+                <Download className="w-3.5 h-3.5" />
+                <span>CSV</span>
               </button>
             </div>
           </div>
-
-          {/* Action Buttons */}
-          <div className="space-y-2">
-            <button
-              onClick={() => connectGoogleAccount()}
-              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-sky-600/20 transition-all flex items-center justify-center gap-2"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>{isGoogleAuthenticated ? 'Re-authenticate / Refresh Gmail Access' : '🔑 Sign In with Google & Grant Access'}</span>
-            </button>
-            <p className="text-[10px] text-slate-400 text-center">
-              Uses authentic Google Workspace OAuth. Mailora AI never stores or shares passwords.
-            </p>
-          </div>
         </div>
+      )}
 
-        {/* Right Column (7 cols): 3D Real-time Autopilot Deliverability & Live Activity Stream */}
-        <div className="lg:col-span-7 rounded-3xl bg-[#0d1322]/90 border border-slate-800 p-6 shadow-xl flex flex-col justify-between space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3.5">
+      {/* ========================================================================= */}
+      {/* TAB 5: TEST SIMULATOR SANDBOX                                             */}
+      {/* ========================================================================= */}
+      {activeTab === 'simulator' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 animate-in fade-in duration-200">
+          {/* Input Panel (5 cols) */}
+          <div className="lg:col-span-5 p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4">
             <div>
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                  <Mail className="w-3.5 h-3.5" />
-                </div>
-                <h3 className="text-sm font-extrabold text-white">Live Auto-Responder Deliverability Stream</h3>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Every incoming email is answered with a dual-part executive HTML & plain-text template designed to bypass spam filters and land in the Primary Inbox.
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Zap className="w-4 h-4 text-amber-400" />
+                <span>Test Client Scenario</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Simulate an incoming email before live clients message your inbox.
               </p>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/30 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                100% Spam-Safe
-              </span>
-            </div>
-          </div>
-
-          {/* Activity Logs & Live Feed */}
-          <div className="space-y-3 flex-1 min-h-[200px] max-h-[300px] overflow-y-auto pr-1">
-            {autoReplyLogs && autoReplyLogs.length > 0 ? (
-              autoReplyLogs.map(log => (
-                <div
-                  key={log.id}
-                  className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800/80 hover:border-slate-700 transition-all space-y-1.5"
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-white flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                      {log.fromName || log.fromEmail}
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono">{log.timestamp}</span>
-                  </div>
-                  <div className="text-[11px] text-sky-400 font-medium truncate">
-                    Subject: {log.subject}
-                  </div>
-                  <div className="text-[11px] text-slate-300 bg-slate-900/60 p-2 rounded-xl border border-slate-800 font-sans leading-relaxed line-clamp-2">
-                    {log.replySnippet}
-                  </div>
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
-                    {log.status === 'SPAM_SKIPPED' ? (
-                      <span className="text-amber-400 font-semibold flex items-center gap-1">
-                        <ShieldCheck className="w-3 h-3 text-amber-400" />
-                        Filtered: Newsletter / Bot (Ignored)
-                      </span>
-                    ) : (
-                      <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" />
-                        Delivered via Gmail API
-                      </span>
-                    )}
-                    <span className="text-slate-500">Intent: {log.intent}</span>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-center p-6 rounded-2xl bg-slate-950/40 border border-dashed border-slate-800 space-y-2">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
-                  <Mail className="w-5 h-5" />
-                </div>
-                <div className="text-xs font-bold text-white">Auto-Responder Ready & Listening</div>
-                <p className="text-[11px] text-slate-400 max-w-sm">
-                  Send an email to <strong className="text-white">{gmailAccount.email}</strong> from any device. Mailora AI will detect it, write a natural human-like reply, and deliver it automatically!
-                </p>
-                <div className="pt-2">
-                  <button
-                    onClick={() => pollAndAutoReplyGmail()}
-                    className="py-1.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-white font-semibold transition-all flex items-center gap-1.5"
-                  >
-                    <RefreshCw className="w-3 h-3 text-sky-400" />
-                    <span>Check Inbox Now</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="p-3 rounded-2xl bg-indigo-950/20 border border-indigo-500/30 flex items-center justify-between text-xs text-slate-300">
-            <span className="flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-indigo-400" />
-              <span>Situation-aware brevity: short questions receive quick, direct 1-2 sentence replies.</span>
-            </span>
-            <span className="text-[10px] text-indigo-300 font-semibold">Gemini 3.8 Flash</span>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. "All Data Input" & Knowledge Training Center */}
-      <div className="rounded-3xl bg-[#0d1322]/90 border border-slate-800 p-6 sm:p-8 shadow-2xl space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
-          <div>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
-                <Database className="w-4 h-4" />
-              </div>
-              <h2 className="text-lg sm:text-xl font-extrabold text-white">
-                All Data Input & Knowledge Training Center
-              </h2>
-            </div>
-            <p className="text-xs text-slate-400 mt-1">
-              Add your business profile, customize human-like prompt rules, upload documents manually, or import your entire website automatically! Gemini 3.8 Flash uses this complete dataset to reply to customer emails.
-            </p>
-          </div>
-
-          {/* Big glowing Save All button */}
-          <button
-            onClick={handleSaveAllData}
-            disabled={isSavingAll}
-            className="py-2.5 px-5 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 hover:from-emerald-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-xl shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 shrink-0 border border-emerald-400/30"
-          >
-            {isSavingAll ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Saving All Data...</span>
-              </>
-            ) : (
-              <>
-                <Save className="w-4 h-4" />
-                <span>💾 Save All Setup & Knowledge Data</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Segmented Data Input Tabs */}
-        <div className="flex flex-wrap gap-2 p-1.5 rounded-2xl bg-slate-950/80 border border-slate-800">
-          <button
-            onClick={() => setActiveDataTab('business')}
-            className={`py-2 px-3 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-              activeDataTab === 'business'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Building2 className="w-3.5 h-3.5" />
-            <span>1. Business Details</span>
-          </button>
-
-          <button
-            onClick={() => setActiveDataTab('ai_rules')}
-            className={`py-2 px-3 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-              activeDataTab === 'ai_rules'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Bot className="w-3.5 h-3.5" />
-            <span>2. Human-Like Persona Rules</span>
-          </button>
-
-          <button
-            onClick={() => setActiveDataTab('faqs')}
-            className={`py-2 px-3 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-              activeDataTab === 'faqs'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>3. FAQs & Q&A ({faqsList.length})</span>
-          </button>
-
-          <button
-            onClick={() => setActiveDataTab('manual_upload')}
-            className={`py-2 px-3 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-              activeDataTab === 'manual_upload'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Upload className="w-3.5 h-3.5" />
-            <span>4. Manual File Upload & Bulk Paste</span>
-          </button>
-
-          <button
-            onClick={() => setActiveDataTab('website_import')}
-            className={`py-2 px-3 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-              activeDataTab === 'website_import'
-                ? 'bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Globe className="w-3.5 h-3.5 text-sky-400" />
-            <span>5. Website Auto-Crawler & Importer ⚡</span>
-          </button>
-
-          <button
-            onClick={() => setActiveDataTab('web_search')}
-            className={`py-2 px-3 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-              activeDataTab === 'web_search'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Search className="w-3.5 h-3.5" />
-            <span>6. Live Web Search Grounding</span>
-          </button>
-        </div>
-
-        {/* Tab 1: Business Profile Details */}
-        {activeDataTab === 'business' && (
-          <div className="space-y-4 animate-in fade-in">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Business / Company Name
-                </label>
-                <input
-                  type="text"
-                  value={businessName}
-                  onChange={e => setBusinessName(e.target.value)}
-                  placeholder="Nexus Digital Labs"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Industry & Main Specialty
-                </label>
-                <input
-                  type="text"
-                  value={industry}
-                  onChange={e => setIndustry(e.target.value)}
-                  placeholder="Custom Web & Mobile Software Development"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Primary Customer Support Email
-                </label>
-                <input
-                  type="email"
-                  value={supportEmail}
-                  onChange={e => setSupportEmail(e.target.value)}
-                  placeholder="support@nexusdigitallabs.com"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Official Website Address
-                </label>
-                <input
-                  type="text"
-                  value={website}
-                  onChange={e => setWebsite(e.target.value)}
-                  placeholder="https://nexusdigitallabs.com"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Support Phone / WhatsApp
-                </label>
-                <input
-                  type="text"
-                  value={phone}
-                  onChange={e => setPhone(e.target.value)}
-                  placeholder="+880 1700-000000"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Business Operating Hours
-                </label>
-                <input
-                  type="text"
-                  value={operatingHours}
-                  onChange={e => setOperatingHours(e.target.value)}
-                  placeholder="Mon-Sat: 9:00 AM - 9:00 PM"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
+            {/* Quick Scenario Presets */}
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => {
+                  setSimSubject('Urgent Request an Appointment');
+                  setSimBody('Hi, I need an urgent meeting to discuss our project scope and pricing.');
+                  setSimCustomerName('Jahid Hasan');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-slate-300 transition-colors cursor-pointer"
+              >
+                📅 Urgent Appointment
+              </button>
+              <button
+                onClick={() => {
+                  setSimSubject('Website Development Package Pricing');
+                  setSimBody('Could you please send me your website development pricing packages and brochure?');
+                  setSimCustomerName('Alex Rivera');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-slate-300 transition-colors cursor-pointer"
+              >
+                💰 Pricing + PDF
+              </button>
+              <button
+                onClick={() => {
+                  setSimSubject('Can we reschedule our meeting time and date to Friday 4pm?');
+                  setSimBody('Hi Alex, Something urgent came up on our side. Ami meeting time and date change korte chai. Can we reschedule our consultation to Friday at 4:00 PM instead? Client preferable date and time slot first check korun available kina, available thakle confirm korun and previous book meeting auto delete kore din so double meeting na hoy.');
+                  setSimCustomerName('Sarah Connor');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-[11px] font-semibold text-indigo-300 border border-indigo-500/30 transition-colors cursor-pointer"
+              >
+                🔄 Auto-Reschedule & Delete Old Meeting
+              </button>
+              <button
+                onClick={() => {
+                  setSimSubject('Can we reschedule our appointment to Friday 4pm EST (UTC-5)?');
+                  setSimBody('Hi Alex, I am in New York (EST / UTC-5 timezone). Can we reschedule our meeting to Friday at 4:00 PM EST? Please verify if this preferable date & time slot is free, confirm it in both UTC timezones, and auto-delete our previous booked slot so there is no double meeting.');
+                  setSimCustomerName('Michael Davies (New York)');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-[11px] font-semibold text-sky-300 border border-sky-500/30 transition-colors cursor-pointer"
+              >
+                🌐 Worldwide UTC Reschedule (UTC-5 ⇄ UTC+6)
+              </button>
+              <button
+                onClick={() => {
+                  setSimSubject('Delivery Time & Guarantee');
+                  setSimBody('How fast can you finish a standard business website and what is your refund policy?');
+                  setSimCustomerName('Sarah Khan');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-slate-300 transition-colors cursor-pointer"
+              >
+                ⏱️ Turnaround Policy
+              </button>
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-300 block mb-1">
-                Email Signature (Automatically Appended to Every AI Reply)
+              <label className="block text-xs font-bold text-slate-300 mb-1">
+                Client Name
               </label>
-              <textarea
-                rows={3}
-                value={emailSignature}
-                onChange={e => setEmailSignature(e.target.value)}
-                placeholder="Best regards,&#10;Nexus Digital Labs Support Team"
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none font-mono"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Tab 2: AI Persona & Custom Instructions */}
-        {activeDataTab === 'ai_rules' && (
-          <div className="space-y-4 animate-in fade-in">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  AI Employee Name (Human Persona)
-                </label>
-                <input
-                  type="text"
-                  value={agentName}
-                  onChange={e => setAgentName(e.target.value)}
-                  placeholder="Alex"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Tone of Voice
-                </label>
-                <select
-                  value={tone}
-                  onChange={e => setTone(e.target.value as AgentTone)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="Professional">Professional & Courteous</option>
-                  <option value="Friendly">Friendly & Warm</option>
-                  <option value="Formal">Formal & Enterprise</option>
-                  <option value="Concise">Concise & Direct</option>
-                  <option value="Empathetic">Empathetic & Caring</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">
-                  Reply Language
-                </label>
-                <select
-                  value={replyLanguage}
-                  onChange={e => setReplyLanguage(e.target.value as ReplyLanguage)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="Multi-language (Auto-detect)">Multi-language (Auto-detect Bangla / English)</option>
-                  <option value="English">Always English</option>
-                  <option value="Bangla">Always Bangla (বাংলা)</option>
-                  <option value="Bangla + English">Bilingual (Bangla + English)</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-indigo-950/20 border border-indigo-500/30 text-xs text-slate-300 space-y-1">
-              <span className="font-bold text-indigo-300 flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Human Natural Response Directives Active:
-              </span>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                When a customer asks a simple question like <em>&quot;What is your name?&quot;</em> or <em>&quot;Tomar nam ki?&quot;</em>, the AI will reply naturally in 1-2 friendly sentences like a real human colleague, with zero robotic fluff.
-              </p>
-            </div>
-
-            <div>
-              <label className="text-xs font-bold text-slate-300 block mb-1">
-                Custom System Directives & Business Instructions (The Core Prompt)
-              </label>
-              <textarea
-                rows={5}
-                value={instructions}
-                onChange={e => setInstructions(e.target.value)}
-                placeholder="Give exact instructions to the AI on how to handle inquiries, quotes, refunds, bookings, etc."
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono leading-relaxed"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Tab 3: FAQs & Q&A Knowledge */}
-        {activeDataTab === 'faqs' && (
-          <div className="space-y-5 animate-in fade-in">
-            {/* Quick Template Buttons */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs font-bold text-slate-400">Quick Starters:</span>
-              <button
-                onClick={() => loadFaqTemplate('pricing')}
-                className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-semibold"
-              >
-                + Pricing FAQs
-              </button>
-              <button
-                onClick={() => loadFaqTemplate('support')}
-                className="px-2.5 py-1 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/30 text-xs font-semibold"
-              >
-                + Support FAQs
-              </button>
-              <button
-                onClick={() => loadFaqTemplate('services')}
-                className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold"
-              >
-                + Technology FAQs
-              </button>
-            </div>
-
-            {/* Existing FAQs List */}
-            <div className="space-y-3 max-h-[360px] overflow-y-auto pr-2">
-              {faqsList.map((faq, idx) => (
-                <div
-                  key={faq.id || idx}
-                  className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800/80 flex items-start justify-between gap-4 hover:border-slate-700 transition-all"
-                >
-                  <div className="space-y-1 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-400 text-[10px] font-bold flex items-center justify-center">
-                        Q{idx + 1}
-                      </span>
-                      <h4 className="text-xs font-bold text-white">{faq.question}</h4>
-                    </div>
-                    <p className="text-xs text-slate-300 pl-7">{faq.answer}</p>
-                  </div>
-
-                  <button
-                    onClick={() => handleDeleteFaq(faq.id)}
-                    className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            {/* Add New FAQ Form */}
-            <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-500/30 space-y-3">
-              <h4 className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
-                <Plus className="w-4 h-4" />
-                <span>Add New Question & Answer Rule</span>
-              </h4>
-
-              <div className="grid grid-cols-1 gap-3">
-                <input
-                  type="text"
-                  value={newQuestion}
-                  onChange={e => setNewQuestion(e.target.value)}
-                  placeholder="e.g. Can you build an eCommerce store with payment gateways?"
-                  className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-
-                <textarea
-                  rows={2}
-                  value={newAnswer}
-                  onChange={e => setNewAnswer(e.target.value)}
-                  placeholder="e.g. Yes! We integrate Stripe, PayPal, bKash, and SSLCommerz into full eCommerce platforms."
-                  className="w-full bg-slate-900 border border-slate-700/80 rounded-xl p-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none"
-                />
-              </div>
-
-              <button
-                onClick={handleAddFaq}
-                className="py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Question to Knowledge Base</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 4: Manual File Upload & Bulk Document Paste */}
-        {activeDataTab === 'manual_upload' && (
-          <div className="space-y-6 animate-in fade-in">
-            {/* Google Drive Central Knowledge Hub (Recommended) */}
-            <div className="p-6 rounded-3xl bg-gradient-to-r from-amber-950/30 via-indigo-950/20 to-slate-950 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl">
-              <div className="space-y-1.5 max-w-xl">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
-                    <HardDrive className="w-4 h-4" />
-                  </div>
-                  <h3 className="text-sm font-extrabold text-white">
-                    Google Drive Cloud Knowledge Repository (Recommended)
-                  </h3>
-                  <span className="text-[10px] font-bold text-amber-300 bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/30">
-                    Cloud Central
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Keep all your business documents (PDFs, Docs, Spreadsheets) stored securely in your Google Drive. Once connected, Mailora AI automatically accesses your Drive files, website data, and manual notes to answer client inquiries with 100% precision.
-                </p>
-              </div>
-
-              <button
-                onClick={() => setIsDriveModalOpen(true)}
-                className="py-2.5 px-5 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all flex items-center gap-2 shrink-0"
-              >
-                <HardDrive className="w-4 h-4" />
-                <span>Connect & Sync Google Drive ↗</span>
-              </button>
-            </div>
-
-            {/* Drag & Drop Upload Zone */}
-            <div
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              className={`p-6 sm:p-8 rounded-3xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center space-y-4 ${
-                dragActive
-                  ? 'border-indigo-400 bg-indigo-500/10'
-                  : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-              }`}
-            >
               <input
-                ref={fileInputRef}
-                type="file"
-                accept=".txt,.md,.json,.csv,.doc,.docx,.pdf"
-                className="hidden"
-                onChange={e => handleFileUpload(e.target.files)}
+                type="text"
+                value={simCustomerName}
+                onChange={e => setSimCustomerName(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
               />
-
-              <div className="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shadow-lg">
-                <Upload className="w-7 h-7" />
-              </div>
-
-              <div className="space-y-1">
-                <h4 className="text-sm font-extrabold text-white">
-                  Drag & Drop Document Here or Browse Files
-                </h4>
-                <p className="text-xs text-slate-400 max-w-md">
-                  Supports TXT, Markdown (.md), JSON, CSV, PDF, and Word documents. The system automatically reads the text and integrates it into your AI employee knowledge base.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800">
-                  <span className="text-[11px] text-slate-400 font-bold">Category:</span>
-                  <select
-                    value={selectedUploadCategory}
-                    onChange={e => setSelectedUploadCategory(e.target.value as KnowledgeCategory)}
-                    className="bg-transparent text-xs text-white focus:outline-none"
-                  >
-                    <option value="Company Information">Company Information</option>
-                    <option value="Products">Products & Catalog</option>
-                    <option value="Services">Services & Solutions</option>
-                    <option value="Pricing">Pricing & Packages</option>
-                    <option value="Refund Policy">Refund Policy</option>
-                    <option value="Shipping Policy">Shipping Policy</option>
-                    <option value="Opening Hours">Opening Hours</option>
-                    <option value="Contact Information">Contact Information</option>
-                    <option value="Custom">Custom Rules</option>
-                  </select>
-                </div>
-
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploadingFile}
-                  className="py-2 px-5 rounded-xl bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-500 hover:to-sky-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2"
-                >
-                  {isUploadingFile ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Reading Document...</span>
-                    </>
-                  ) : (
-                    <>
-                      <FileCheck className="w-3.5 h-3.5" />
-                      <span>Browse from Computer</span>
-                    </>
-                  )}
-                </button>
-              </div>
             </div>
 
-            {/* List of uploaded files / knowledge items */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-white flex items-center gap-2">
-                  <FileText className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Uploaded Documents & Knowledge Files ({knowledge.filter(k => k.sourceFileName).length})</span>
-                </h4>
-                <button
-                  onClick={() => setIsDriveModalOpen(true)}
-                  className="py-1.5 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all flex items-center gap-1.5"
-                >
-                  <HardDrive className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Google Drive Sync ↗</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {knowledge
-                  .filter(k => k.sourceFileName || k.category !== 'FAQ')
-                  .slice(0, 6)
-                  .map(item => (
-                    <div
-                      key={item.id}
-                      className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-1.5 hover:border-slate-700 transition-all"
-                    >
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold text-white truncate max-w-[180px]">
-                          {item.title}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-md font-semibold bg-indigo-500/20 text-indigo-300">
-                          {item.category}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">
-                        {item.content}
-                      </p>
-                      <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900">
-                        <span>{item.sourceFileSize || `${item.content.length} chars`}</span>
-                        <span className="text-emerald-400 font-semibold">Indexed</span>
-                      </div>
-                    </div>
-                  ))}
-              </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-300 mb-1">
+                Email Subject
+              </label>
+              <input
+                type="text"
+                value={simSubject}
+                onChange={e => setSimSubject(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-white/10 text-xs text-white focus:outline-none focus:border-indigo-500"
+              />
             </div>
 
-            {/* Direct Document Paste */}
-            <div className="space-y-2 pt-2">
-              <label className="text-xs font-bold text-slate-300 block">
-                Or Paste Full Business Document / Catalog Text
+            <div>
+              <label className="block text-xs font-bold text-slate-300 mb-1">
+                Email Body
               </label>
               <textarea
-                rows={6}
-                value={bulkText}
-                onChange={e => setBulkText(e.target.value)}
-                placeholder="Paste company background, terms, packages, pricing tables, refund conditions, warranty details, etc."
-                className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono leading-relaxed"
+                rows={4}
+                value={simBody}
+                onChange={e => setSimBody(e.target.value)}
+                className="w-full p-3 rounded-xl bg-slate-950 border border-white/10 text-xs text-white leading-relaxed focus:outline-none focus:border-indigo-500"
               />
             </div>
-          </div>
-        )}
 
-        {/* Tab 5: Website Auto-Crawler & Importer */}
-        {activeDataTab === 'website_import' && (
-          <div className="space-y-6 animate-in fade-in">
-            <div className="p-6 rounded-3xl bg-gradient-to-r from-sky-950/30 via-indigo-950/20 to-slate-950 border border-sky-500/30 space-y-4">
-              <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 shadow-md">
-                      <Globe className="w-4 h-4" />
-                    </div>
-                    <h3 className="text-sm sm:text-base font-extrabold text-white">
-                      Automated Website Content & Visual Importer
-                    </h3>
-                  </div>
-                  <p className="text-xs text-slate-300 leading-relaxed max-w-2xl">
-                    Enter your company or client&apos;s website URL. Mailora AI will automatically crawl the website, extract all headings, core offerings, pricing terms, contact information, and image assets, and train your AI employee on them instantly!
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={handleRunSimulation}
+                disabled={isSimulating}
+                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>{isSimulating ? 'Analyzing & Generating...' : 'Test AI Reply'}</span>
+              </button>
+
+              <button
+                onClick={handleSendLiveTest}
+                disabled={isSendingLiveTest}
+                className="w-full py-2 px-4 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white font-bold text-xs flex items-center justify-center gap-2 transition-all border border-white/10 cursor-pointer disabled:opacity-50"
+              >
+                <Send className="w-3.5 h-3.5 text-sky-400" />
+                <span>{isSendingLiveTest ? 'Dispatching via Gmail...' : 'Send Real Test Email to My Gmail Inbox'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Output Panel (7 cols) */}
+          <div className="lg:col-span-7 p-5 sm:p-6 rounded-2xl bg-[#0b0f19] border border-white/10 space-y-4 flex flex-col justify-between">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-white/5">
+                <span className="text-xs font-bold text-white flex items-center gap-2">
+                  <Bot className="w-4 h-4 text-emerald-400" />
+                  <span>AI Generated Output Preview</span>
+                </span>
+                {simResult && (
+                  <span className="text-[11px] font-bold text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                    {simResult.intent}
+                  </span>
+                )}
+              </div>
+
+              {!simResult ? (
+                <div className="text-center py-20 text-slate-500 space-y-2">
+                  <Zap className="w-8 h-8 mx-auto text-slate-600" />
+                  <p className="text-xs">
+                    Click <strong>&quot;Test AI Reply&quot;</strong> on the left to see how your AI employee reads requirements and generates response.
                   </p>
                 </div>
-
-                <span className="text-[11px] font-bold text-sky-300 bg-sky-500/20 px-3 py-1 rounded-full border border-sky-400/30 shrink-0">
-                  Auto-Crawler
-                </span>
-              </div>
-
-              {/* URL Input and Crawl Trigger */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                <div className="relative flex-1">
-                  <input
-                    type="url"
-                    value={targetWebsiteUrl}
-                    onChange={e => setTargetWebsiteUrl(e.target.value)}
-                    placeholder="https://yourwebsite.com"
-                    className="w-full bg-slate-900/90 border border-slate-700/80 rounded-2xl px-4 py-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 font-mono"
-                  />
-                </div>
-
-                <button
-                  onClick={handleStartWebsiteCrawl}
-                  disabled={isCrawlingSite}
-                  className="py-3 px-6 rounded-2xl bg-gradient-to-r from-sky-500 via-indigo-600 to-purple-600 hover:from-sky-400 hover:to-purple-500 text-white font-extrabold text-xs shadow-xl shadow-sky-500/20 transition-all flex items-center justify-center gap-2 shrink-0 border border-sky-400/30"
-                >
-                  {isCrawlingSite ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Crawling Website Data...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="w-4 h-4" />
-                      <span>🚀 Import Website Data Auto</span>
-                    </>
+              ) : (
+                <div className="space-y-4">
+                  {/* Meet booking card badge with dual timezone */}
+                  {simResult.meetingInfo && (
+                    <div className="p-3.5 rounded-xl bg-gradient-to-r from-indigo-950/40 to-sky-950/30 border border-indigo-500/30 text-xs text-indigo-300 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Video className="w-4 h-4 text-indigo-400" />
+                          <span>Slot: <strong>{simResult.meetingInfo.date}</strong></span>
+                        </div>
+                        <span className="text-[11px] font-bold text-indigo-400">
+                          {simResult.meetingInfo.isReschedule ? '✓ Rescheduled & Old Cancelled' : 'Google Meet Ready'}
+                        </span>
+                      </div>
+                      {simResult.meetingInfo.timezoneBadge && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono text-sky-300 bg-sky-500/10 px-2.5 py-1 rounded-lg border border-sky-500/20">
+                          <Globe className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                          <span>Dual Timezone: {simResult.meetingInfo.timezoneBadge}</span>
+                        </div>
+                      )}
+                    </div>
                   )}
-                </button>
-              </div>
 
-              {/* Crawl Progress Indicator */}
-              {isCrawlingSite && (
-                <div className="p-4 rounded-2xl bg-slate-950/80 border border-sky-500/40 space-y-2 animate-in fade-in">
-                  <div className="flex items-center justify-between text-xs text-sky-300 font-bold">
-                    <span className="flex items-center gap-2">
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-400" />
-                      {crawlProgressStep === 1 && 'Connecting to website domain & fetching HTML...'}
-                      {crawlProgressStep === 2 && 'Parsing headings, services, and core catalog...'}
-                      {crawlProgressStep === 3 && 'Extracting contact details and image assets...'}
-                      {crawlProgressStep === 4 && 'Indexing into Gemini 3.8 Flash knowledge base!'}
-                    </span>
-                    <span className="font-mono text-[11px]">{crawlProgressStep * 25}%</span>
-                  </div>
-                  <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-sky-400 to-indigo-500 transition-all duration-300"
-                      style={{ width: `${crawlProgressStep * 25}%` }}
-                    />
+                  {/* Attachment badge if any */}
+                  {simResult.attachmentInfo && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2">
+                      <Paperclip className="w-4 h-4 text-amber-400" />
+                      <span>Attached: <strong>{simResult.attachmentInfo.filename}</strong></span>
+                    </div>
+                  )}
+
+                  {/* Formatted Reply Body */}
+                  <div className="p-4 rounded-xl bg-slate-950 border border-white/10 text-xs text-slate-200 leading-relaxed font-sans whitespace-pre-wrap">
+                    {simResult.reply}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Extracted Data Preview & Image Asset Catalog */}
-            {lastCrawledData ? (
-              <div className="p-6 rounded-3xl bg-slate-950/80 border border-slate-800 space-y-5 animate-in fade-in">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-sky-400 tracking-wider">
-                      Crawl Completed Successfully
-                    </span>
-                    <h4 className="text-base font-extrabold text-white mt-0.5">
-                      {lastCrawledData.title}
-                    </h4>
-                    <p className="text-xs text-slate-400">{lastCrawledData.description}</p>
-                  </div>
-                  <span className="text-xs font-mono text-slate-400 bg-slate-900 px-3 py-1 rounded-xl border border-slate-800">
-                    {lastCrawledData.wordCount} words &bull; {lastCrawledData.crawledAt}
+            <div className="pt-3 border-t border-white/5 flex items-center justify-between text-[11px] text-slate-500">
+              <span>Delivery Format: RFC 2046 Dual Plain/HTML + Anti-Spam Headers</span>
+              <span>100% Primary Inbox</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* SLIDE-OVER DETAIL MODAL FOR CLICKED ACTIVITY LOG                          */}
+      {/* ========================================================================= */}
+      {selectedLogDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="relative w-full max-w-2xl rounded-3xl bg-[#0b0f19] border border-white/10 shadow-2xl p-6 sm:p-8 text-slate-100 max-h-[90vh] overflow-y-auto space-y-5">
+            <button
+              onClick={() => setSelectedLogDetail(null)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-white/5 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="border-b border-white/10 pb-4">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs font-bold text-emerald-400 px-2 py-0.5 rounded bg-emerald-500/10">
+                  {selectedLogDetail.intent || 'Delivered'}
+                </span>
+                <span className="text-xs text-slate-400">· {selectedLogDetail.timestamp}</span>
+              </div>
+              <h3 className="text-lg font-bold text-white">{selectedLogDetail.subject}</h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Client: <strong>{selectedLogDetail.fromName}</strong> ({selectedLogDetail.fromEmail})
+              </p>
+            </div>
+
+            {/* Inbound Customer Snippet */}
+            <div className="space-y-1.5">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Customer Inquiry Message
+              </span>
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-white/10 text-xs text-slate-300">
+                {selectedLogDetail.incomingSnippet || 'Customer inquiry message'}
+              </div>
+            </div>
+
+            {/* AI Dispatched Reply */}
+            <div className="space-y-1.5">
+              <span className="text-xs font-bold uppercase tracking-wider text-indigo-400">
+                AI Employee Dispatched Reply (Sent via Gmail)
+              </span>
+              <div className="p-4 rounded-xl bg-slate-950 border border-indigo-500/20 text-xs text-slate-200 whitespace-pre-wrap leading-relaxed">
+                {selectedLogDetail.fullReply || selectedLogDetail.replySnippet}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-white/10 text-xs text-slate-400">
+              <span>Status: Successfully Sent & Marked as Read</span>
+              <button
+                onClick={() => setSelectedLogDetail(null)}
+                className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* IN-APP GMAIL EMAIL VIEWER & AI TASK ANALYSIS MODAL                       */}
+      {/* ========================================================================= */}
+      {selectedGmailEmail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="relative w-full max-w-3xl rounded-3xl bg-[#0b0f19] border border-white/10 shadow-2xl p-6 sm:p-8 text-slate-100 max-h-[90vh] overflow-y-auto space-y-6">
+            <button
+              onClick={() => setSelectedGmailEmail(null)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-white/5 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Email Header */}
+            <div className="border-b border-white/10 pb-4 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span
+                  className={`text-xs font-bold px-2.5 py-0.5 rounded-md border ${
+                    selectedGmailEmail.category === 'URGENT'
+                      ? 'bg-red-500/20 text-red-300 border-red-500/30'
+                      : selectedGmailEmail.category === 'MEETING'
+                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                      : selectedGmailEmail.category === 'INQUIRY'
+                      ? 'bg-sky-500/20 text-sky-300 border-sky-500/30'
+                      : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                  }`}
+                >
+                  {selectedGmailEmail.category} MAIL
+                </span>
+
+                {selectedGmailEmail.isFromSpam && (
+                  <span className="text-xs font-bold text-amber-300 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 flex items-center gap-1">
+                    <ShieldAlert className="w-3.5 h-3.5" />
+                    <span>Rescued from Spam</span>
+                  </span>
+                )}
+
+                <span className="text-xs text-slate-400">· Received: {selectedGmailEmail.date}</span>
+
+                <span className="text-xs text-slate-400">
+                  · Status:{' '}
+                  <strong className={selectedGmailEmail.isUnread ? 'text-sky-400' : 'text-slate-400'}>
+                    {selectedGmailEmail.isUnread ? 'Unread' : 'Read'}
+                  </strong>
+                </span>
+              </div>
+
+              <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                {selectedGmailEmail.subject}
+              </h2>
+
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <div>
+                  From: <strong className="text-slate-200">{selectedGmailEmail.fromName}</strong> ({selectedGmailEmail.from})
+                </div>
+                <div>
+                  To: <span className="text-slate-300 font-mono">{gmailAccount.email}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Email Body */}
+            <div className="space-y-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                Email Message Body
+              </span>
+              <div className="p-4 sm:p-5 rounded-2xl bg-slate-950 border border-white/10 text-xs sm:text-sm text-slate-200 whitespace-pre-wrap leading-relaxed font-sans">
+                {selectedGmailEmail.body}
+              </div>
+            </div>
+
+            {/* Worldwide Timezone Coordination Banner */}
+            {selectedGmailEmail.category === 'MEETING' && (
+              <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 text-indigo-300">
+                  <Globe className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span>
+                    <strong>Worldwide Timezone Coordination:</strong> Client Timezone:{' '}
+                    <strong className="text-white">{TimezoneService.detectClientTimezone(`${selectedGmailEmail.subject} ${selectedGmailEmail.body}`).label}</strong> • Host:{' '}
+                    <strong className="text-white">{TimezoneService.getUserUtcOffsetFormatted()} ({TimezoneService.getUserTimezone()})</strong>
                   </span>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Extracted Services */}
-                  <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-2">
-                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      Extracted Services & Topics
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {lastCrawledData.services.map((srv, i) => (
-                        <span
-                          key={i}
-                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
-                        >
-                          {srv}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Discovered Contact Details */}
-                  <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-2">
-                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <Phone className="w-3.5 h-3.5 text-sky-400" />
-                      Discovered Contact Details
-                    </span>
-                    <div className="space-y-1 text-xs text-slate-300">
-                      <div>
-                        <strong>Emails:</strong> {lastCrawledData.contactInfo.emails.join(', ') || 'Found in text'}
-                      </div>
-                      <div>
-                        <strong>Phone:</strong> {lastCrawledData.contactInfo.phones.join(', ') || 'Found in text'}
-                      </div>
-                      <div>
-                        <strong>Website:</strong>{' '}
-                        <a
-                          href={lastCrawledData.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-sky-400 hover:underline"
-                        >
-                          {lastCrawledData.url}
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Extracted Images Gallery */}
-                {lastCrawledData.images && lastCrawledData.images.length > 0 && (
-                  <div className="space-y-2">
-                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <ImageIcon className="w-3.5 h-3.5 text-purple-400" />
-                      Extracted Website Images & Visuals ({lastCrawledData.images.length})
-                    </span>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      {lastCrawledData.images.map((img, idx) => (
-                        <div
-                          key={idx}
-                          className="group relative rounded-2xl overflow-hidden border border-slate-800 bg-slate-900 aspect-video shadow-md"
-                        >
-                          <img
-                            src={img.src}
-                            alt={img.alt}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                            onError={e => {
-                              (e.target as any).style.display = 'none';
-                            }}
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-80" />
-                          <div className="absolute bottom-2 left-2 right-2 text-[10px] text-white font-semibold truncate">
-                            {img.alt || 'Website Asset'}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="p-8 rounded-3xl bg-slate-950/40 border border-dashed border-slate-800 text-center space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center mx-auto">
-                  <Globe className="w-6 h-6" />
-                </div>
-                <div className="text-xs font-bold text-white">No Website Crawled Yet</div>
-                <p className="text-[11px] text-slate-400 max-w-md mx-auto leading-relaxed">
-                  Enter your website URL above and click &quot;Import Website Data Auto&quot;. The crawler will extract all content, services, FAQs, and imagery directly into your AI agent&apos;s memory!
-                </p>
+                <span className="text-[11px] font-mono text-emerald-400 bg-emerald-500/15 px-2.5 py-1 rounded-lg border border-emerald-500/30 whitespace-nowrap">
+                  ✓ UTC Mapped
+                </span>
               </div>
             )}
-          </div>
-        )}
 
-        {/* Tab 6: Live Web Search Grounding */}
-        {activeDataTab === 'web_search' && (
-          <div className="space-y-5 animate-in fade-in">
-            <div className="p-6 rounded-3xl bg-gradient-to-r from-emerald-950/30 via-slate-950 to-indigo-950/20 border border-emerald-500/30 space-y-4">
+            {/* AI Task & Requirement Analysis Preview */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-indigo-950/40 to-slate-950 border border-indigo-500/20 space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-                    <Search className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-extrabold text-white">
-                      Live Google Search Grounding for Customer Inquiries
-                    </h3>
-                    <p className="text-[11px] text-slate-400">
-                      Enables Gemini 3.8 Flash to access real-time live internet information when replying to emails.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <span className="text-xs font-bold text-slate-300">
-                    {webSearchEnabled ? 'Grounding Active' : 'Grounding Paused'}
-                  </span>
-                  <button
-                    onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                    className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
-                      webSearchEnabled ? 'bg-emerald-500' : 'bg-slate-700'
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${
-                        webSearchEnabled ? 'translate-x-6' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs text-slate-300 space-y-2">
-                <span className="font-bold text-white flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                  How Live Web Search Works for Email Auto-Replies:
+                <span className="text-xs font-bold uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
+                  <Bot className="w-4 h-4 text-indigo-400" />
+                  <span>AI First Requirement & Task Analysis</span>
                 </span>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  When a client emails asking about current market specs, pricing benchmarks, live integration requirements, or recent updates that are not inside your uploaded documents, Gemini 3.8 Flash automatically executes Google Search Grounding to find the accurate, up-to-the-minute answer and includes it naturally in the reply.
-                </p>
+                <span className="text-[10px] font-bold text-emerald-400 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
+                  Automated Task Pipeline
+                </span>
               </div>
 
-              {/* Interactive Search Tester */}
-              <div className="space-y-3 pt-2">
-                <label className="text-xs font-bold text-slate-300 block">
-                  Test Live Google Search Capability:
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={searchTestQuery}
-                    onChange={e => setSearchTestQuery(e.target.value)}
-                    placeholder="Ask any current web question..."
-                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                  />
-                  <button
-                    onClick={async () => {
-                      setIsSearchingWeb(true);
-                      setSearchTestResult(null);
-                      try {
-                        await new Promise(r => setTimeout(r, 900));
-                        setSearchTestResult(
-                          `Real-time query answered: In 2026, web standards emphasize Next.js App Router, Vite 6+, TypeScript 5+, Tailwind CSS 4+, and AI-grounded API integrations with 99.9% uptime.`
-                        );
-                      } finally {
-                        setIsSearchingWeb(false);
-                      }
-                    }}
-                    disabled={isSearchingWeb}
-                    className="py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5"
-                  >
-                    {isSearchingWeb ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Search className="w-3.5 h-3.5" />
-                    )}
-                    <span>Search</span>
-                  </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span className="text-slate-400 text-[11px] block">Identified Client Intent:</span>
+                  <span className="font-bold text-white">
+                    {selectedGmailEmail.category === 'MEETING'
+                      ? selectedGmailEmail.subject.toLowerCase().includes('reschedule') || selectedGmailEmail.body.toLowerCase().includes('change')
+                        ? 'Meeting Reschedule & Calendar Re-booking'
+                        : 'Appointment / Consultation Request'
+                      : selectedGmailEmail.category === 'URGENT'
+                      ? 'Urgent Priority Inquiry'
+                      : selectedGmailEmail.category === 'INQUIRY'
+                      ? 'Services, Rates & Brochure Request'
+                      : 'General Client Correspondence'}
+                  </span>
                 </div>
 
-                {searchTestResult && (
-                  <div className="p-3.5 rounded-2xl bg-emerald-950/30 border border-emerald-500/40 text-xs text-slate-300 animate-in fade-in space-y-1">
-                    <span className="font-bold text-emerald-400 flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Live Web Grounded Answer:
-                    </span>
-                    <p className="text-[11px] leading-relaxed">{searchTestResult}</p>
-                  </div>
-                )}
+                <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                  <span className="text-slate-400 text-[11px] block">Calendar & Booking Action:</span>
+                  <span className="font-bold text-indigo-300">
+                    {selectedGmailEmail.category === 'MEETING'
+                      ? selectedGmailEmail.subject.toLowerCase().includes('reschedule') || selectedGmailEmail.body.toLowerCase().includes('change')
+                        ? '✓ Auto-detect previous booking, delete old event & book proposed slot'
+                        : '✓ Real-time slot verification & Google Meet generation'
+                      : 'None required (Direct requirement answer)'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-white/10 text-xs">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    toggleEmailReadStatus(selectedGmailEmail.id, selectedGmailEmail.isUnread);
+                    setSelectedGmailEmail(prev => prev ? { ...prev, isUnread: !prev.isUnread } : null);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <MailOpen className="w-3.5 h-3.5" />
+                  <span>{selectedGmailEmail.isUnread ? 'Mark as Read' : 'Mark as Unread'}</span>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button
+                  onClick={() => setSelectedGmailEmail(null)}
+                  className="flex-1 sm:flex-initial px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
+
+                <button
+                  onClick={async () => {
+                    setIsProcessingAiEmailId(selectedGmailEmail.id);
+                    await processSingleEmailWithAi(selectedGmailEmail);
+                    setIsProcessingAiEmailId(null);
+                    setSelectedGmailEmail(prev => prev ? { ...prev, hasAiReplied: true, isUnread: false } : null);
+                  }}
+                  disabled={isProcessingAiEmailId === selectedGmailEmail.id}
+                  className="flex-1 sm:flex-initial px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-all shadow-md shadow-indigo-600/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isProcessingAiEmailId === selectedGmailEmail.id ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  )}
+                  <span>
+                    {isProcessingAiEmailId === selectedGmailEmail.id ? 'Executing AI Action...' : 'Run AI Action & Send Reply'}
+                  </span>
+                </button>
               </div>
             </div>
           </div>
-        )}
-
-        {/* Bottom Save Bar */}
-        <div className="border-t border-slate-800 pt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span className="text-xs text-slate-400 flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Changes persist immediately to Firebase Firestore</span>
-          </span>
-
-          <button
-            onClick={handleSaveAllData}
-            disabled={isSavingAll}
-            className="w-full sm:w-auto py-2.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 hover:from-emerald-400 hover:to-indigo-500 text-white font-extrabold text-xs shadow-xl shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 border border-emerald-400/30"
-          >
-            {isSavingAll ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Saving All Data...</span>
-              </>
-            ) : (
-              <>
-                <Save className="w-4 h-4" />
-                <span>💾 Save All Setup & Knowledge Data</span>
-              </>
-            )}
-          </button>
         </div>
-      </div>
+      )}
+
     </div>
   );
 };

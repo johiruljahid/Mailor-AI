@@ -71,10 +71,30 @@ googleProvider.setCustomParameters({
   access_type: 'offline'
 });
 
-// Restore token from sessionStorage if previously granted in this browser session
+// Restore token from localStorage/sessionStorage if previously granted
+const getStoredToken = (): string | null => {
+  try {
+    return localStorage.getItem('mailora_oauth_token') || sessionStorage.getItem('mailora_oauth_token');
+  } catch {
+    return null;
+  }
+};
+
+const setStoredToken = (token: string | null) => {
+  try {
+    if (token) {
+      localStorage.setItem('mailora_oauth_token', token);
+      sessionStorage.setItem('mailora_oauth_token', token);
+    } else {
+      localStorage.removeItem('mailora_oauth_token');
+      sessionStorage.removeItem('mailora_oauth_token');
+    }
+  } catch {}
+};
+
 let cachedAccessToken: string | null = null;
 try {
-  cachedAccessToken = sessionStorage.getItem('mailora_oauth_token');
+  cachedAccessToken = getStoredToken();
   if (cachedAccessToken) {
     GmailService.setAccessToken(cachedAccessToken);
     GoogleDriveService.setAccessToken(cachedAccessToken);
@@ -94,7 +114,7 @@ export const initAuth = (
 
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      const activeToken = cachedAccessToken || sessionStorage.getItem('mailora_oauth_token') || '';
+      const activeToken = cachedAccessToken || getStoredToken() || '';
       if (activeToken) {
         cachedAccessToken = activeToken;
         GmailService.setAccessToken(activeToken);
@@ -105,10 +125,8 @@ export const initAuth = (
       }
       if (onAuthSuccess) onAuthSuccess(user, activeToken);
     } else {
+      // Note: Do not destroy the server autopilot token on browser logout
       cachedAccessToken = null;
-      try {
-        sessionStorage.removeItem('mailora_oauth_token');
-      } catch {}
       GmailService.setAccessToken(null);
       GoogleDriveService.setAccessToken(null);
       GoogleSheetsService.setAccessToken(null);
@@ -132,9 +150,7 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
     
     if (token) {
       cachedAccessToken = token;
-      try {
-        sessionStorage.setItem('mailora_oauth_token', token);
-      } catch {}
+      setStoredToken(token);
       GmailService.setAccessToken(token);
       GoogleDriveService.setAccessToken(token);
       GoogleSheetsService.setAccessToken(token);
@@ -152,28 +168,25 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
 };
 
 export const getCachedAccessToken = (): string | null => {
-  return cachedAccessToken || sessionStorage.getItem('mailora_oauth_token');
+  return cachedAccessToken || getStoredToken();
 };
 
 export const setCachedAccessToken = (token: string | null) => {
   cachedAccessToken = token;
-  try {
-    if (token) {
-      sessionStorage.setItem('mailora_oauth_token', token);
-      GmailService.setAccessToken(token);
-      GoogleDriveService.setAccessToken(token);
-      GoogleSheetsService.setAccessToken(token);
-      GoogleDocsService.setAccessToken(token);
-      GoogleCalendarService.setAccessToken(token);
-    } else {
-      sessionStorage.removeItem('mailora_oauth_token');
-      GmailService.setAccessToken(null);
-      GoogleDriveService.setAccessToken(null);
-      GoogleSheetsService.setAccessToken(null);
-      GoogleDocsService.setAccessToken(null);
-      GoogleCalendarService.setAccessToken(null);
-    }
-  } catch {}
+  setStoredToken(token);
+  if (token) {
+    GmailService.setAccessToken(token);
+    GoogleDriveService.setAccessToken(token);
+    GoogleSheetsService.setAccessToken(token);
+    GoogleDocsService.setAccessToken(token);
+    GoogleCalendarService.setAccessToken(token);
+  } else {
+    GmailService.setAccessToken(null);
+    GoogleDriveService.setAccessToken(null);
+    GoogleSheetsService.setAccessToken(null);
+    GoogleDocsService.setAccessToken(null);
+    GoogleCalendarService.setAccessToken(null);
+  }
 };
 
 export const signInWithEmail = async (email: string, pass: string) => {

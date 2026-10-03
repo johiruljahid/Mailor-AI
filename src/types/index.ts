@@ -250,8 +250,31 @@ export interface CalendarBooking {
   endFormatted: string;
   meetUrl?: string;
   calendarLink?: string;
-  status: 'CONFIRMED' | 'PROPOSED' | 'CANCELLED';
+  status: 'CONFIRMED' | 'PROPOSED' | 'CANCELLED' | 'RESCHEDULED';
   createdAt: string;
+  clientTimezone?: string;
+  userTimezone?: string;
+  clientUtcOffset?: string;
+  userUtcOffset?: string;
+  dualTimezoneBadge?: string;
+}
+
+export type GmailEmailCategory = 'URGENT' | 'MEETING' | 'INQUIRY' | 'NORMAL';
+
+export interface CategorizedGmailEmail {
+  id: string;
+  threadId: string;
+  from: string;
+  fromName: string;
+  subject: string;
+  snippet: string;
+  body: string;
+  date: string;
+  category: GmailEmailCategory;
+  isUnread: boolean;
+  isFromSpam: boolean;
+  hasAiReplied: boolean;
+  urgency: 'high' | 'normal';
 }
 
 export interface GoogleCalendarConfig {

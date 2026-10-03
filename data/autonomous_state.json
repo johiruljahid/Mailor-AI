@@ -1,0 +1,33 @@
+{
+  "isEnabled": true,
+  "googleAccessToken": null,
+  "businessName": "Imbdagency Tech",
+  "supportEmail": "support@imbdagency.com",
+  "agentConfig": {
+    "name": "Alex Jordan",
+    "tone": "Professional",
+    "replyLanguage": "Auto",
+    "emailSignature": "Best regards,\nAlex Jordan\nImbdagency",
+    "instructions": "Always be courteous, direct, and helpful."
+  },
+  "calendarConfig": {
+    "isConnected": true,
+    "autoBookMeetings": true,
+    "defaultMeetingDurationMinutes": 30
+  },
+  "sheetsConfig": {
+    "isConnected": false,
+    "spreadsheetId": ""
+  },
+  "knowledge": [],
+  "handledMessageIds": [],
+  "lastPollStatus": "IDLE",
+  "stats": {
+    "totalPolled": 0,
+    "totalReplied": 0,
+    "totalMeetingsBooked": 0,
+    "lastPolledAt": "",
+    "lastRepliedAt": ""
+  },
+  "logs": []
+}

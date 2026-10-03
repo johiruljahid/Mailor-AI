@@ -11,6 +11,15 @@ export interface GmailProfile {
   historyId: string;
 }
 
+import { CategorizedGmailEmail } from '../types';
+
+export interface EmailAttachment {
+  filename: string;
+  mimeType: string;
+  base64Content: string; // Base64 encoded file bytes
+  sizeBytes?: number;
+}
+
 export interface SendEmailPayload {
   to: string;
   subject: string;
@@ -19,6 +28,7 @@ export interface SendEmailPayload {
   inReplyTo?: string;
   senderName?: string;
   businessName?: string;
+  attachments?: EmailAttachment[];
 }
 
 export interface InboundEmailItem {
@@ -41,6 +51,7 @@ export function buildSpamSafeHtmlEmail(plainTextBody: string, options: {
   senderName?: string;
   businessName?: string;
   subject?: string;
+  attachments?: EmailAttachment[];
 }): string {
   const sender = options.senderName || 'Alex Jordan';
   const business = options.businessName || 'Nexus Digital Labs';
@@ -55,6 +66,27 @@ export function buildSpamSafeHtmlEmail(plainTextBody: string, options: {
       return `<p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.7; color: #1e293b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">${cleanP}</p>`;
     })
     .join('');
+
+  const attachmentsBadgeHtml =
+    options.attachments && options.attachments.length > 0
+      ? `<tr>
+            <td style="padding: 0 32px 20px 32px;">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 12px 16px;">
+                <tr>
+                  <td valign="middle" style="width: 32px; font-size: 20px; line-height: 1;">📎</td>
+                  <td valign="middle">
+                    <div style="font-size: 13px; font-weight: 700; color: #166534; margin-bottom: 2px;">
+                      Attached Document${options.attachments.length > 1 ? 's' : ''}
+                    </div>
+                    <div style="font-size: 12px; color: #15803d;">
+                      ${options.attachments.map(a => a.filename).join(', ')}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>`
+      : '';
 
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
@@ -118,6 +150,8 @@ export function buildSpamSafeHtmlEmail(plainTextBody: string, options: {
               ${paragraphs}
             </td>
           </tr>
+
+          ${attachmentsBadgeHtml}
 
           <!-- Quick Follow-up Prompt Bar -->
           <tr>
@@ -226,6 +260,7 @@ export class GmailService {
 
   /**
    * Fetch unread inbox messages from the connected Gmail account for automatic background replies
+   * Scans both Inbox and Spam so client inquiries landing in Spam are not missed
    */
   static async fetchUnreadEmails(maxResults: number = 5, accessToken?: string): Promise<InboundEmailItem[]> {
     const token = accessToken || this.cachedToken;
@@ -235,7 +270,7 @@ export class GmailService {
 
     try {
       const listRes = await fetch(
-        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=is:unread in:inbox`,
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=is:unread (in:inbox OR in:spam)`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -330,6 +365,239 @@ export class GmailService {
   }
 
   /**
+   * Fetch recent emails and organize into Urgent, Meeting, Inquiry, and Normal categories
+   * Also scans Spam so user never misses a genuine lead trapped in spam.
+   */
+  static async fetchCategorizedEmails(
+    maxResults: number = 30,
+    accessToken?: string,
+    repliedMessageIds: Set<string> = new Set()
+  ): Promise<CategorizedGmailEmail[]> {
+    const token = accessToken || this.cachedToken;
+    if (!token || token.startsWith('demo_')) {
+      // Return realistic categorized inbox for demo mode
+      return [
+        {
+          id: 'demo_msg_urgent_1',
+          threadId: 'demo_thr_1',
+          from: 'jahid.hasan@innovate.co',
+          fromName: 'Jahid Hasan',
+          subject: 'Urgent Request an Appointment for Web Platform Demo',
+          snippet: 'Hi, we have an urgent project deadline and need to book a 30-minute consultation tomorrow...',
+          body: 'Hi Alex,\n\nWe have an urgent project deadline and need to book a 30-minute consultation tomorrow at 3pm to review our full SaaS architecture requirements.\n\nPlease confirm our meeting and send the Google Meet invitation.\n\nBest,\nJahid Hasan',
+          date: '10:45 AM',
+          category: 'URGENT',
+          isUnread: true,
+          isFromSpam: false,
+          hasAiReplied: true,
+          urgency: 'high',
+        },
+        {
+          id: 'demo_msg_reschedule_2',
+          threadId: 'demo_thr_2',
+          from: 'sarah.connor@apexbrands.co',
+          fromName: 'Sarah Connor',
+          subject: 'Can we reschedule our meeting time and date to Friday 4pm?',
+          snippet: 'Something urgent came up. Ami meeting time and date change korte chai, can we do Friday at 4:00 PM?...',
+          body: 'Hi Team,\n\nSomething urgent came up on our side today. Ami meeting time and date change korte chai. Can we reschedule our consultation to Friday at 4:00 PM instead of our earlier scheduled time?\n\nPlease update the Google Calendar invite and auto delete our previous booked appointment if that new time is available.\n\nThanks,\nSarah',
+          date: 'Yesterday',
+          category: 'MEETING',
+          isUnread: true,
+          isFromSpam: false,
+          hasAiReplied: false,
+          urgency: 'normal',
+        },
+        {
+          id: 'demo_msg_inquiry_3',
+          threadId: 'demo_thr_3',
+          from: 'marcus.vance@venturelabs.io',
+          fromName: 'Marcus Vance',
+          subject: 'Website Development Package Pricing & Brochure Request',
+          snippet: 'Could you please send over your full web development service rates, brochure, and turnaround times?',
+          body: 'Hello Support Team,\n\nCould you please share your updated web development pricing tiers, brochure PDF, and average turnaround timelines for a 5-page corporate site?\n\nLooking forward to your details,\nMarcus',
+          date: 'Oct 2',
+          category: 'INQUIRY',
+          isUnread: false,
+          isFromSpam: false,
+          hasAiReplied: true,
+          urgency: 'normal',
+        },
+        {
+          id: 'demo_msg_spam_lead_5',
+          threadId: 'demo_thr_5',
+          from: 'kamal.hossain@fintechasia.net',
+          fromName: 'Kamal Hossain',
+          subject: 'Enterprise Banking Dashboard Quote Request',
+          snippet: '[Trapped in Spam - Rescued by Mailora] We need a quote for an enterprise portal with payment integration...',
+          body: 'Hello Team,\n\nI was referred to your agency by a mutual client. We require a quote and timeline for developing an enterprise banking portal with real-time analytics.\n\nPlease share your corporate credentials and let us know your availability.\n\nRegards,\nKamal Hossain\nCTO, FinTech Asia',
+          date: 'Oct 1',
+          category: 'INQUIRY',
+          isUnread: true,
+          isFromSpam: true,
+          hasAiReplied: true,
+          urgency: 'high',
+        },
+        {
+          id: 'demo_msg_normal_4',
+          threadId: 'demo_thr_4',
+          from: 'support@cloudserver.com',
+          fromName: 'Cloud Server Notifications',
+          subject: 'Monthly Infrastructure Status & Health Report',
+          snippet: 'Your monthly usage report is now available. All 4 services are healthy and running with 99.98% uptime.',
+          body: 'Your monthly usage statement for October is available in your account console. 99.98% uptime maintained across all production clusters.',
+          date: 'Oct 1',
+          category: 'NORMAL',
+          isUnread: false,
+          isFromSpam: false,
+          hasAiReplied: false,
+          urgency: 'normal',
+        },
+      ];
+    }
+
+    try {
+      const listRes = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${maxResults}&q=in:inbox OR in:spam`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+        }
+      );
+
+      if (!listRes.ok) {
+        return [];
+      }
+
+      const listData = await listRes.json();
+      if (!listData.messages || listData.messages.length === 0) {
+        return [];
+      }
+
+      const categorizedList: CategorizedGmailEmail[] = [];
+
+      for (const msgRef of listData.messages.slice(0, maxResults)) {
+        try {
+          const detailRes = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgRef.id}?format=full`,
+            {
+              headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+            }
+          );
+          if (!detailRes.ok) continue;
+
+          const detail = await detailRes.json();
+          const headers = detail.payload?.headers || [];
+          const getHeader = (name: string) =>
+            headers.find((h: any) => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+
+          const fromHeader = getHeader('From');
+          let fromEmail = fromHeader;
+          let fromName = fromHeader;
+          const match = fromHeader.match(/^(.*?)\s*<([^>]+)>/);
+          if (match) {
+            fromName = match[1].replace(/["']/g, '').trim() || match[2];
+            fromEmail = match[2].trim();
+          }
+
+          const subject = getHeader('Subject') || '(No Subject)';
+          const dateStr = getHeader('Date') || 'Recently';
+
+          const findBody = (part: any): string => {
+            if (part.mimeType === 'text/plain' && part.body?.data) {
+              try {
+                return atob(part.body.data.replace(/-/g, '+').replace(/_/g, '/'));
+              } catch {
+                return '';
+              }
+            }
+            if (part.parts) {
+              for (const p of part.parts) {
+                const b = findBody(p);
+                if (b) return b;
+              }
+            }
+            return '';
+          };
+
+          const bodyText = findBody(detail.payload) || detail.snippet || '';
+          const combinedLower = `${subject} ${bodyText}`.toLowerCase();
+
+          const isUrgent =
+            combinedLower.includes('urgent') ||
+            combinedLower.includes('asap') ||
+            combinedLower.includes('immediate') ||
+            combinedLower.includes('emergency') ||
+            combinedLower.includes('critical');
+
+          const isMeeting =
+            combinedLower.includes('meeting') ||
+            combinedLower.includes('appointment') ||
+            combinedLower.includes('reschedule') ||
+            combinedLower.includes('change time') ||
+            combinedLower.includes('change date') ||
+            combinedLower.includes('schedule a call') ||
+            combinedLower.includes('book a call') ||
+            combinedLower.includes('consultation') ||
+            combinedLower.includes('google meet') ||
+            combinedLower.includes('zoom');
+
+          const isInquiry =
+            combinedLower.includes('price') ||
+            combinedLower.includes('pricing') ||
+            combinedLower.includes('cost') ||
+            combinedLower.includes('how much') ||
+            combinedLower.includes('package') ||
+            combinedLower.includes('brochure') ||
+            combinedLower.includes('service') ||
+            combinedLower.includes('quote') ||
+            combinedLower.includes('portfolio') ||
+            combinedLower.includes('policy') ||
+            combinedLower.includes('refund');
+
+          let category: 'URGENT' | 'MEETING' | 'INQUIRY' | 'NORMAL' = 'NORMAL';
+          if (isUrgent) {
+            category = 'URGENT';
+          } else if (isMeeting) {
+            category = 'MEETING';
+          } else if (isInquiry) {
+            category = 'INQUIRY';
+          }
+
+          const labelIds: string[] = detail.labelIds || [];
+          const isUnread = labelIds.includes('UNREAD');
+          const isFromSpam = labelIds.includes('SPAM');
+          const hasAiReplied = repliedMessageIds.has(detail.id) || !isUnread;
+
+          categorizedList.push({
+            id: detail.id,
+            threadId: detail.threadId || detail.id,
+            from: fromEmail,
+            fromName: fromName || fromEmail.split('@')[0],
+            subject,
+            snippet: detail.snippet || bodyText.slice(0, 120),
+            body: bodyText,
+            date: dateStr,
+            category,
+            isUnread,
+            isFromSpam,
+            hasAiReplied,
+            urgency: isUrgent ? 'high' : 'normal',
+          });
+        } catch (detailErr) {
+          console.warn('Error reading message detail:', detailErr);
+        }
+      }
+
+      return categorizedList;
+    } catch (err) {
+      console.warn('Gmail fetchCategorizedEmails notice:', err);
+      return [];
+    }
+  }
+
+  /**
    * Mark an email message as read by removing the UNREAD label in Gmail
    */
   static async markAsRead(messageId: string, accessToken?: string): Promise<boolean> {
@@ -353,6 +621,34 @@ export class GmailService {
       return res.ok;
     } catch (e) {
       console.warn('Failed to mark message as read in Gmail:', e);
+      return false;
+    }
+  }
+
+  /**
+   * Mark an email message as unread by adding the UNREAD label in Gmail
+   */
+  static async markAsUnread(messageId: string, accessToken?: string): Promise<boolean> {
+    const token = accessToken || this.cachedToken;
+    if (!token || token.startsWith('demo_')) {
+      return true;
+    }
+
+    try {
+      const res = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/modify`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          addLabelIds: ['UNREAD'],
+        }),
+      });
+
+      return res.ok;
+    } catch (e) {
+      console.warn('Failed to mark message as unread in Gmail:', e);
       return false;
     }
   }
@@ -507,43 +803,99 @@ export class GmailService {
       senderName: payload.senderName,
       businessName: payload.businessName,
       subject: payload.subject,
+      attachments: payload.attachments,
     });
 
     // Clean plain text fallback
     const plainText = payload.body;
+    let fullMimeMessage = '';
 
-    const messageLines = [
-      `To: ${payload.to}`,
-      `Subject: ${utf8Subject}`,
-      'MIME-Version: 1.0',
-      `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    ];
+    if (payload.attachments && payload.attachments.length > 0) {
+      const mixedBoundary = `====mailora_mixed_${Date.now()}_${Math.random().toString(36).substr(2, 8)}====`;
+      const altBoundary = `====mailora_alt_${Date.now()}_${Math.random().toString(36).substr(2, 8)}====`;
 
-    if (payload.inReplyTo) {
-      messageLines.push(`In-Reply-To: ${payload.inReplyTo}`);
-      messageLines.push(`References: ${payload.inReplyTo}`);
+      const headers = [
+        `To: ${payload.to}`,
+        `Subject: ${utf8Subject}`,
+        'MIME-Version: 1.0',
+        `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
+      ];
+
+      if (payload.inReplyTo) {
+        headers.push(`In-Reply-To: ${payload.inReplyTo}`);
+        headers.push(`References: ${payload.inReplyTo}`);
+      }
+
+      const mimeParts: string[] = [
+        ...headers,
+        '',
+        `--${mixedBoundary}`,
+        `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+        '',
+        `--${altBoundary}`,
+        'Content-Type: text/plain; charset="UTF-8"',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        plainText,
+        '',
+        `--${altBoundary}`,
+        'Content-Type: text/html; charset="UTF-8"',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        htmlEmail,
+        '',
+        `--${altBoundary}--`,
+      ];
+
+      for (const att of payload.attachments) {
+        const cleanBase64 = att.base64Content.replace(/\s+/g, '');
+        mimeParts.push(
+          '',
+          `--${mixedBoundary}`,
+          `Content-Type: ${att.mimeType || 'application/pdf'}; name="${att.filename}"`,
+          'Content-Transfer-Encoding: base64',
+          `Content-Disposition: attachment; filename="${att.filename}"`,
+          '',
+          cleanBase64
+        );
+      }
+
+      mimeParts.push('', `--${mixedBoundary}--`);
+      fullMimeMessage = mimeParts.join('\r\n');
+    } else {
+      const messageLines = [
+        `To: ${payload.to}`,
+        `Subject: ${utf8Subject}`,
+        'MIME-Version: 1.0',
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      ];
+
+      if (payload.inReplyTo) {
+        messageLines.push(`In-Reply-To: ${payload.inReplyTo}`);
+        messageLines.push(`References: ${payload.inReplyTo}`);
+      }
+
+      // Append Multipart MIME Structure:
+      // 1. Plain Text part
+      // 2. HTML Part
+      fullMimeMessage = [
+        ...messageLines,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/plain; charset="UTF-8"',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        plainText,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/html; charset="UTF-8"',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        htmlEmail,
+        '',
+        `--${boundary}--`,
+      ].join('\r\n');
     }
-
-    // Append Multipart MIME Structure:
-    // 1. Plain Text part
-    // 2. HTML Part
-    const fullMimeMessage = [
-      ...messageLines,
-      '',
-      `--${boundary}`,
-      'Content-Type: text/plain; charset="UTF-8"',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      plainText,
-      '',
-      `--${boundary}`,
-      'Content-Type: text/html; charset="UTF-8"',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      htmlEmail,
-      '',
-      `--${boundary}--`,
-    ].join('\r\n');
 
     // Base64URL encode
     const encodedMessage = btoa(unescape(encodeURIComponent(fullMimeMessage)))

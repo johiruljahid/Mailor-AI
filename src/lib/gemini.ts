@@ -177,7 +177,50 @@ export async function generateAgentEmailReply(params: {
   retrievedChunks: RetrievedChunk[];
   intent: EmailIntent;
   enableWebSearch?: boolean;
-  meetingBookingInfo?: { status: 'BOOKED'; dateFormatted: string; meetUrl?: string; eventLink?: string } | { status: 'SUGGEST_SLOTS'; availableSlots: string[] };
+  meetingBookingInfo?:
+    | {
+        status: 'BOOKED';
+        dateFormatted: string;
+        meetUrl?: string;
+        eventLink?: string;
+        isReschedule?: boolean;
+        timezoneBadge?: string;
+        clientTimezone?: string;
+        userTimezone?: string;
+        userUtcOffset?: string;
+        clientUtcOffset?: string;
+        dualTimezoneSentence?: string;
+        preferredDateBusy?: boolean;
+      }
+    | {
+        status: 'RESCHEDULED';
+        dateFormatted: string;
+        previousDateFormatted?: string;
+        meetUrl?: string;
+        eventLink?: string;
+        isReschedule?: boolean;
+        timezoneBadge?: string;
+        clientTimezone?: string;
+        userTimezone?: string;
+        userUtcOffset?: string;
+        clientUtcOffset?: string;
+        dualTimezoneSentence?: string;
+        preferredDateBusy?: boolean;
+      }
+    | {
+        status: 'SUGGEST_SLOTS';
+        availableSlots: string[];
+        isReschedule?: boolean;
+        previousDateFormatted?: string;
+        timezoneBadge?: string;
+        clientTimezone?: string;
+        userTimezone?: string;
+        userUtcOffset?: string;
+        clientUtcOffset?: string;
+        dualTimezoneSentence?: string;
+        preferredDateBusy?: boolean;
+      };
+  attachmentInfo?: { filename: string; driveUrl?: string };
 }): Promise<{
   reply: string;
   decision: 'AUTO_REPLY' | 'NEEDS_REVIEW' | 'ESCALATE_HUMAN';
@@ -187,12 +230,13 @@ export async function generateAgentEmailReply(params: {
     subject,
     body,
     customerName = 'there',
-    businessName = 'Nexus Digital Labs',
+    businessName = 'Imbdagency',
     agentConfig,
     retrievedChunks,
     intent,
     enableWebSearch = true,
     meetingBookingInfo,
+    attachmentInfo,
   } = params;
 
   // 1. Try server-side Gemini generation first (uses server GEMINI_API_KEY with Google Search Grounding)
@@ -232,13 +276,43 @@ export async function generateAgentEmailReply(params: {
           ? 'Provide a concise bilingual response in warm Bangla (বাংলা) followed by English.'
           : 'Detect the language of the incoming message. If the customer wrote in Bangla (or Banglish), reply in natural polite Bangla. If in English, reply in natural professional English.';
 
-      const meetingInstructions = meetingBookingInfo?.status === 'BOOKED'
-        ? `\n\nOFFICIAL GOOGLE CALENDAR APPOINTMENT CONFIRMATION:\n- Meeting has been automatically booked on Google Calendar for: ${meetingBookingInfo.dateFormatted}\n- Google Meet Link: ${meetingBookingInfo.meetUrl || 'meet.google.com'}\nInclude a clear, polite confirmation in your reply confirming this meeting date/time, provide the Google Meet link, and note that a Google Calendar invite has been sent to their email.\n`
+      const meetingInstructions = meetingBookingInfo?.status === 'RESCHEDULED'
+        ? `\n\nCRITICAL MANDATORY REQUIREMENT - APPOINTMENT RESCHEDULE CONFIRMATION EMAIL:
+- The client requested to reschedule or change the meeting date/time.
+- The new appointment has ALREADY BEEN BOOKED for: ${meetingBookingInfo.dateFormatted}
+- Previous appointment was for: ${meetingBookingInfo.previousDateFormatted || 'earlier scheduled slot'} (AND HAS BEEN CANCELLED/DELETED from Google Calendar).
+- New Google Meet Video Call Link: ${meetingBookingInfo.meetUrl || 'https://meet.google.com'}
+- Calendar Invite: Updated Google Calendar invitation dispatched to the client's email address.
+YOUR TASK:
+1. This email MUST BE an explicit, warm, executive-grade APPOINTMENT RESCHEDULE CONFIRMATION.
+2. Confirm that their appointment has been successfully moved to the new requested date & time (${meetingBookingInfo.dateFormatted}).
+3. Clearly provide the Google Meet link in the first few lines and confirm that the previous session on ${meetingBookingInfo.previousDateFormatted || 'earlier slot'} was cancelled.
+4. If the client had any other questions or specs, answer them concisely below the confirmation!\n`
+        : meetingBookingInfo?.status === 'BOOKED'
+        ? `\n\nCRITICAL MANDATORY REQUIREMENT - APPOINTMENT CONFIRMATION EMAIL:
+- A Google Calendar appointment has ALREADY BEEN BOOKED for: ${meetingBookingInfo.dateFormatted}
+- Google Meet Video Call Link: ${meetingBookingInfo.meetUrl || 'https://meet.google.com'}
+- Calendar Invite: Dispatched to the client's email address.
+YOUR TASK:
+1. This email MUST BE an explicit, warm, executive-grade APPOINTMENT CONFIRMATION.
+2. Clearly state the exact confirmed date & time and provide the Google Meet link in the first few lines.
+3. Mention that a Google Calendar invitation has been sent directly to their calendar.
+4. DO NOT say "Could you please share a few more details so I can assist you with the exact information you need?".
+5. If the client asked any questions or specified project requirements in their email, answer those requirements concisely and directly right below the appointment confirmation!\n`
         : meetingBookingInfo?.status === 'SUGGEST_SLOTS' && meetingBookingInfo.availableSlots?.length > 0
-        ? `\n\nCALENDAR AVAILABILITY & SUGGESTED SLOTS:\n- The client requested a meeting or consultation. Based on our real-time Google Calendar availability, present the following open time slots in clean bullet points:\n${meetingBookingInfo.availableSlots.map((s: string) => `  • ${s}`).join('\n')}\nPolitely ask which of these times works best for them.\n`
+        ? `\n\nCALENDAR AVAILABILITY & SUGGESTED SLOTS:
+- The client requested a meeting or consultation. Based on our real-time Google Calendar schedule, present the following open time slots in clean bullet points:
+${meetingBookingInfo.availableSlots.map((s: string) => `  • ${s}`).join('\n')}
+Politely ask which of these times works best for them so we can confirm the reservation immediately.\n`
         : '';
 
-      const prompt = `You are ${agentConfig.name}, a genuine human employee and support lead at ${businessName}.
+      const attachmentInstructions = attachmentInfo
+        ? `\n\nATTACHED DOCUMENT NOTICE:
+- You have attached the file "${attachmentInfo.filename}" to this email for the client.
+- Mention that this document is attached for their review (and note they can view it online at: ${attachmentInfo.driveUrl || 'Google Drive'}).\n`
+        : '';
+
+      const prompt = `You are ${agentConfig.name}, an authentic human employee and client support specialist at ${businessName}.
 Tone: ${agentConfig.tone}.
 Language: ${languageInstruction}
 
@@ -251,7 +325,7 @@ CRITICAL ACCURACY, HUMAN AUTHENTICITY & SPECIFICITY RULES:
      Provide a clear, structured bullet-point breakdown (•) listing each relevant service, package name, exact price, and turnaround time from the verified knowledge base.
    - For multi-part inquiries:
      Address each question in a structured, readable manner using clean bullet points (•) and natural paragraph breaks.
-   - For short single questions (e.g. "What is your name?", "Where are you located?"), reply directly in 1-2 friendly human sentences.${meetingInstructions}
+   - For short single questions (e.g. "What is your name?", "Where are you located?"), reply directly in 1-2 friendly human sentences.${meetingInstructions}${attachmentInstructions}
 5. NO ROBOTIC CLICHÉS (Never say "As an AI...", "I hope this email finds you well!", "Your inquiry has been logged").
 6. Ground your answers strictly on the company knowledge below.
 7. Sign off naturally:
@@ -364,12 +438,78 @@ Generate the final, complete email reply text:`;
     }
   }
 
-  // Meeting booking handler in fallback
-  let meetingBlock = '';
+  const attachmentNote = attachmentInfo
+    ? `\n\n📎 Attached Document:\nI have attached our ${attachmentInfo.filename} for your review. (Online link: ${attachmentInfo.driveUrl || 'Google Drive'}).`
+    : '';
+
+  // Priority Scenario 0: Confirmed Appointment Reschedule
+  if (meetingBookingInfo?.status === 'RESCHEDULED') {
+    const cleanSubject = subject.replace(/^(re|fwd):\s*/i, '').trim();
+    const tzHighlight = meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge
+      ? `• Timezone Coordination (Worldwide): ${meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge}\n`
+      : '';
+    const tzHighlightBn = meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge
+      ? `• টাইমজোন সমন্বয় (Worldwide): ${meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge}\n`
+      : '';
+
+    if (isBangla) {
+      const banglaReply = `আসসালামু আলাইকুম ${customerName !== 'there' ? customerName : ''}!\n\nআপনার অনুরোধ অনুযায়ী আমাদের মিটিংয়ের তারিখ ও সময় সফলভাবে পরিবর্তন (Reschedule) করা হয়েছে। ডাবল মিটিং প্রতিরোধ করার জন্য আপনার পূর্ববর্তী বুকিংটি স্বয়ংক্রিয়ভাবে ক্যালেন্ডার থেকে ডিলিট করা হয়েছে।\n\nনতুন অ্যাপয়েন্টমেন্টের বিবরণ:\n• নতুন তারিখ ও সময়: ${meetingBookingInfo.dateFormatted}\n${tzHighlightBn}• গুগল মিট লিংক: ${meetingBookingInfo.meetUrl || 'https://meet.google.com'}\n• বিষয়: ${cleanSubject}\n• পূর্ববর্তী অ্যাপয়েন্টমেন্ট স্ট্যাটাস: আপনার আগের বুকিংটি (${meetingBookingInfo.previousDateFormatted || 'আগের মিটিংটি'}) অটোমেটিক ডিলিট ও বাতিল করা হয়েছে এবং কোনো ডাবল মিটিং নেই।${attachmentNote}\n\nনতুন নির্ধারিত সময়ে আপনার সাথে প্রজেক্টের যাবতীয় বিষয় নিয়ে আলোচনার জন্য প্রস্তুত থাকব। মিটিংয়ের পূর্বে কোনো ফাইল বা তথ্য থাকলে এই ইমেইলে জানাতে পারেন।\n\nআন্তরিক ধন্যবাদ,\n${agentConfig.name}\n${actualBusinessName}`;
+      return { reply: banglaReply, decision: 'AUTO_REPLY' };
+    } else {
+      const engReply = `Hi ${customerName !== 'there' ? customerName : 'there'},\n\nThank you for reaching out to us at ${actualBusinessName}.\n\nYour appointment has been successfully rescheduled per your request! To ensure no duplicate booking occurs, your previous meeting has been automatically removed from our calendar.\n\nHere are the updated details for our session:\n• New Date & Time: ${meetingBookingInfo.dateFormatted}\n${tzHighlight}• Meeting Platform: Google Meet (${meetingBookingInfo.meetUrl || 'https://meet.google.com'})\n• Subject: ${cleanSubject}\n• Previous Appointment: Automatically cancelled and deleted from calendar (${meetingBookingInfo.previousDateFormatted || 'previous slot'}) with zero double-booking.${attachmentNote}\n\nAn updated Google Calendar invite has been synchronized with your email. I look forward to speaking with you at our newly scheduled time!\n\nBest regards,\n${agentConfig.name}\n${actualBusinessName}`;
+      return { reply: engReply, decision: 'AUTO_REPLY' };
+    }
+  }
+
+  // Priority Scenario 1: Confirmed Google Calendar Appointment
   if (meetingBookingInfo?.status === 'BOOKED') {
-    meetingBlock = `\n\n✓ Meeting Confirmed:\n• Date & Time: ${meetingBookingInfo.dateFormatted}\n• Google Meet Link: ${meetingBookingInfo.meetUrl || 'https://meet.google.com'}\n• A Google Calendar invitation has been sent to your email.`;
-  } else if (meetingBookingInfo?.status === 'SUGGEST_SLOTS' && meetingBookingInfo.availableSlots?.length > 0) {
-    meetingBlock = `\n\nRegarding our availability for a meeting or consultation, here are our next open Google Calendar slots:\n${meetingBookingInfo.availableSlots.map(s => `• ${s}`).join('\n')}\n\nPlease reply with the time that works best for you and I will reserve it immediately!`;
+    const cleanSubject = subject.replace(/^(re|fwd):\s*/i, '').trim();
+    const tzHighlight = meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge
+      ? `• Timezone Coordination (Worldwide): ${meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge}\n`
+      : '';
+    const tzHighlightBn = meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge
+      ? `• টাইমজোন সমন্বয় (Worldwide): ${meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge}\n`
+      : '';
+
+    // Check if client asked other questions (like pricing or services) alongside appointment
+    let extraRequirementsAnswer = '';
+    if (cleanBodyLower.includes('pricing') || cleanBodyLower.includes('cost') || cleanBodyLower.includes('rate')) {
+      extraRequirementsAnswer = `\n\nRegarding your inquiry about our packages and rates:\n• Starter Package: $250 - $499 (3-5 days delivery)\n• Growth Custom Solution: $999 - $1,499 (7-10 days delivery)\n• Enterprise Software: Custom scope & dedicated milestone delivery.`;
+    }
+
+    if (isBangla) {
+      const banglaReply = `আসসালামু আলাইকুম ${customerName !== 'there' ? customerName : ''}!\n\n${actualBusinessName}-এর সাথে আপনার অ্যাপয়েন্টমেন্ট সফলভাবে কনফার্ম করা হয়েছে।\n\nঅ্যাপয়েন্টমেন্টের বিবরণ:\n• তারিখ ও সময়: ${meetingBookingInfo.dateFormatted}\n${tzHighlightBn}• গুগল মিট লিংক: ${meetingBookingInfo.meetUrl || 'https://meet.google.com'}\n• বিষয়: ${cleanSubject}\n• ক্যালেন্ডার ইনভাইট: আপনার ইমেইল ক্যালেন্ডারে সরাসরি পাঠিয়ে দেওয়া হয়েছে।${extraRequirementsAnswer}${attachmentNote}\n\nআপনার রিকোয়ারমেন্ট অনুযায়ী আমি বিস্তারিত প্রস্তুতি রাখছি। আমাদের মিটিংয়ে আপনার প্রজেক্টের যাবতীয় বিষয় নিয়ে খোলামেলা আলোচনা করব। মিটিংয়ের পূর্বে কোনো বিশেষ তথ্য বা ফাইল পাঠাতে চাইলে এই ইমেইলে সরাসরি রিপ্লাই দিতে পারেন।\n\nআন্তরিক ধন্যবাদ,\n${agentConfig.name}\n${actualBusinessName}`;
+      return { reply: banglaReply, decision: 'AUTO_REPLY' };
+    } else {
+      const engReply = `Hi ${customerName !== 'there' ? customerName : 'there'},\n\nThank you for reaching out to us at ${actualBusinessName}.\n\nYour appointment has been successfully scheduled and confirmed! Here are the details for our session:\n\n• Date & Time: ${meetingBookingInfo.dateFormatted}\n${tzHighlight}• Meeting Platform: Google Meet (${meetingBookingInfo.meetUrl || 'https://meet.google.com'})\n• Subject / Purpose: ${cleanSubject}\n• Calendar Invite: A Google Calendar invitation with the video call link has been dispatched to your email address.${extraRequirementsAnswer}${attachmentNote}\n\nI have reviewed your message and will be prepared to discuss your project requirements in detail during our call. If you have any specs, files, or questions beforehand, please feel free to reply directly to this email.\n\nLooking forward to speaking with you!\n\nBest regards,\n${agentConfig.name}\n${actualBusinessName}`;
+      return { reply: engReply, decision: 'AUTO_REPLY' };
+    }
+  }
+
+  // Priority Scenario 2: Proposed Google Calendar Slots
+  if (meetingBookingInfo?.status === 'SUGGEST_SLOTS' && meetingBookingInfo.availableSlots?.length > 0) {
+    const slotList = meetingBookingInfo.availableSlots.map(s => `• ${s}`).join('\n');
+    const busyNoteBn = meetingBookingInfo.preferredDateBusy
+      ? 'আপনার উল্লিখিত প্রাথমিক সময়টিতে অন্য একটি কনসালটেশন থাকায় স্লটটি বুকড ছিল। তবে নিচের ওপেন স্লটগুলো আপনার সুবিধার্থে প্রস্তাব করা হলো:\n\n'
+      : '';
+    const busyNoteEng = meetingBookingInfo.preferredDateBusy
+      ? 'We checked your requested time slot, which has a scheduling conflict. However, here are our closest open Google Calendar slots:\n\n'
+      : '';
+
+    const tzNoteBn = meetingBookingInfo.timezoneBadge
+      ? `\n\n🌐 টাইমজোন রেফারেন্স: ${meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge}`
+      : '';
+    const tzNoteEng = meetingBookingInfo.timezoneBadge
+      ? `\n\n🌐 Timezone Reference: ${meetingBookingInfo.dualTimezoneSentence || meetingBookingInfo.timezoneBadge}`
+      : '';
+
+    if (isBangla) {
+      const banglaReply = `আসসালামু আলাইকুম ${customerName !== 'there' ? customerName : ''}!\n\n${actualBusinessName}-এ অ্যাপয়েন্টমেন্টের জন্য যোগাযোগ করার জন্য ধন্যবাদ।\n\n${busyNoteBn}আমাদের রিয়েল-টাইম ক্যালেন্ডার অনুযায়ী নিচের স্লটগুলো খালি রয়েছে:\n\n${slotList}${tzNoteBn}${attachmentNote}\n\nআপনার সুবিধানুযায়ী যে কোনো একটি সময় নির্বাচন করে রিপ্লাই দিন, আমরা অবিলম্বে গুগল মিট লিংক সহ আপনার জন্য অ্যাপয়েন্টমেন্ট কনফার্ম করে দিব!\n\nআন্তরিক ধন্যবাদ,\n${agentConfig.name}\n${actualBusinessName}`;
+      return { reply: banglaReply, decision: 'AUTO_REPLY' };
+    } else {
+      const engReply = `Hi ${customerName !== 'there' ? customerName : 'there'},\n\nThank you for reaching out to us at ${actualBusinessName} regarding your appointment request.\n\n${busyNoteEng}Based on our current schedule, here are our next open Google Calendar meeting times:\n\n${slotList}${tzNoteEng}${attachmentNote}\n\nPlease reply with the slot that works best for you, and I will reserve the appointment immediately and send your Google Meet invitation!\n\nBest regards,\n${agentConfig.name}\n${actualBusinessName}`;
+      return { reply: engReply, decision: 'AUTO_REPLY' };
+    }
   }
 
   // Scenario C: Pricing & packages (Itemized in clear bullet points)
@@ -378,17 +518,16 @@ Generate the final, complete email reply text:`;
     let priceDetails = '';
     if (priceChunk) {
       const cleaned = cleanChunkText(priceChunk.snippet || priceChunk.fullContent);
-      // Format lines into clear bullet points if not already
       priceDetails = cleaned
         .split('\n')
         .filter(l => l.trim().length > 0)
         .map(l => (l.trim().startsWith('•') || l.trim().startsWith('-') ? l.trim() : `• ${l.trim()}`))
         .join('\n');
     } else {
-      priceDetails = `• Starter Package: $250 - $499 (Turnaround: 3-5 days)\n• Professional Custom Solution: $999 - $1,499 (Turnaround: 7-10 days)\n• Enterprise & Ongoing Retainer: Tailored to scope with transparent milestone delivery.`;
+      priceDetails = `• Starter Package: $250 - $499 (Turnaround: 3-5 business days)\n• Professional Custom Solution: $999 - $1,499 (Turnaround: 7-10 business days)\n• Enterprise & Ongoing Retainer: Tailored to scope with transparent milestone delivery.`;
     }
 
-    const reply = `Hi ${customerName !== 'there' ? customerName : 'there'},\n\nThank you for asking about our service charges and rates at ${actualBusinessName}. Here is our current pricing breakdown:\n\n${priceDetails}${meetingBlock}\n\nIf you have a specific project scope or budget in mind, please feel free to share your requirements and I will prepare a customized quote for you!\n\nBest regards,\n${agentConfig.name}\n${actualBusinessName}`;
+    const reply = `Hi ${customerName !== 'there' ? customerName : 'there'},\n\nThank you for asking about our service charges and rates at ${actualBusinessName}. Here is our current pricing breakdown:\n\n${priceDetails}${attachmentNote}\n\nIf you have a specific project scope or budget in mind, please feel free to share your requirements and I will prepare a customized quote for you!\n\nBest regards,\n${agentConfig.name}\n${actualBusinessName}`;
     return { reply, decision: 'AUTO_REPLY' };
   }
 
@@ -402,15 +541,15 @@ Generate the final, complete email reply text:`;
     return { reply, decision: 'AUTO_REPLY' };
   }
 
-  // General synthesized human response
+  // Scenario E: Universal Business Requirement Synthesizer
   const greeting = customerName && customerName !== 'there' ? `Hi ${customerName},` : 'Hello,';
   let bodyContent = '';
 
   if (retrievedChunks.length > 0) {
     const topCleaned = cleanChunkText(retrievedChunks[0].snippet || retrievedChunks[0].fullContent);
-    bodyContent = `Thank you for contacting ${actualBusinessName}.\n\nRegarding your question:\n${topCleaned}\n\nPlease let me know if you would like more details or if you have any other questions. I am always happy to help!`;
+    bodyContent = `Thank you for contacting ${actualBusinessName} regarding "${subject}".\n\nRegarding your requirement:\n${topCleaned}${attachmentNote}\n\nPlease let me know if you would like to proceed or if you need any additional adjustments. I am always happy to help!`;
   } else {
-    bodyContent = `Thank you for reaching out to us at ${actualBusinessName}.\n\nI have received your message regarding "${subject}". Could you please share a few more details so I can assist you with the exact information you need?\n\nLooking forward to hearing from you!`;
+    bodyContent = `Thank you for reaching out to us at ${actualBusinessName}.\n\nRegarding your message "${subject}":\nWe specialize in ${servicesSummary}. We are fully equipped to handle your specific requirements with high quality and dedicated turnaround.${attachmentNote}\n\nPlease let me know your target timeline or any specific preferences, and I will be happy to assist you immediately!`;
   }
 
   const signature = agentConfig.emailSignature || `Best regards,\n${agentConfig.name}\n${actualBusinessName}`;

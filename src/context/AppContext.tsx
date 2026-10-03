@@ -18,6 +18,7 @@ import {
   GoogleSheetsConfig,
   CalendarBooking,
   GoogleCalendarConfig,
+  CategorizedGmailEmail,
 } from '../types';
 import {
   INITIAL_USER,
@@ -82,6 +83,17 @@ interface AppContextType {
   pollAndAutoReplyGmail: () => Promise<{ processed: number }>;
   isGoogleAuthenticated: boolean;
   connectGoogleAccount: () => Promise<void>;
+  serverAutopilotStatus: any;
+  fetchServerAutopilotStatus: () => Promise<void>;
+  triggerServerAutopilotNow: () => Promise<void>;
+  syncAutonomousBackend: (token?: string | null) => void;
+
+  // In-App Categorized Gmail Inbox
+  categorizedGmailEmails: CategorizedGmailEmail[];
+  isLoadingGmailEmails: boolean;
+  loadCategorizedGmailEmails: () => Promise<void>;
+  toggleEmailReadStatus: (messageId: string, currentUnread: boolean) => Promise<void>;
+  processSingleEmailWithAi: (email: CategorizedGmailEmail) => Promise<{ success: boolean; reply?: string }>;
 
   // Google Sheets Activity Report
   googleSheetsConfig: GoogleSheetsConfig;
@@ -202,7 +214,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       localStorage.setItem('mailora_auto_responder_active', String(active));
     } catch {}
+
+    // Instantly notify backend autonomous server engine
+    fetch('/api/autonomous/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: active }),
+    }).catch(e => console.warn('Autonomous toggle sync notice:', e));
+
+    addToast({
+      type: active ? 'success' : 'info',
+      title: active ? '24/7 Autopilot Activated ✓' : '24/7 Autopilot Paused (OFF)',
+      message: active
+        ? 'Autonomous AI will reply to incoming emails 24/7 even if this browser tab is closed.'
+        : 'Autonomous autoresponder has been turned OFF. No emails will be sent.',
+    });
   };
+
+  const syncAutonomousBackend = (token?: string | null) => {
+    const activeToken = token || GmailService.getAccessToken() || getCachedAccessToken();
+    fetch('/api/autonomous/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        googleAccessToken: activeToken,
+        isEnabled: isAutoResponderActive,
+        businessName: business.name,
+        supportEmail: gmailAccount.email,
+        agentConfig: agent,
+        calendarConfig,
+        sheetsConfig: googleSheetsConfig,
+        knowledge,
+      }),
+    }).catch(e => console.warn('Autonomous backend sync notice:', e));
+  };
+
+  // 24/7 Background Server Autopilot State & Management
+  const [serverAutopilotStatus, setServerAutopilotStatus] = useState<any>(null);
+
+  const fetchServerAutopilotStatus = async () => {
+    try {
+      const res = await fetch('/api/autonomous/status');
+      if (res.ok) {
+        const data = await res.json();
+        setServerAutopilotStatus(data);
+        // Merge any replies sent by the server while user was offline or logged out
+        if (data.logs && Array.isArray(data.logs) && data.logs.length > 0) {
+          setAutoReplyLogs(prev => {
+            const existingIds = new Set(prev.map(l => l.id || l.messageId));
+            const newServerLogs = data.logs.filter((l: any) => !existingIds.has(l.id || l.messageId));
+            if (newServerLogs.length > 0) {
+              return [...newServerLogs, ...prev].slice(0, 50);
+            }
+            return prev;
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Notice querying autonomous status:', e);
+    }
+  };
+
+  const triggerServerAutopilotNow = async () => {
+    try {
+      syncAutonomousBackend();
+      const res = await fetch('/api/autonomous/trigger-now', { method: 'POST' });
+      const data = await res.json();
+      await fetchServerAutopilotStatus();
+      addToast({
+        type: 'success',
+        title: '24/7 Autopilot Polled Inbox ✓',
+        message: `Background server checked inbox. Processed ${data.processed || 0} incoming email(s).`,
+      });
+    } catch (err: any) {
+      addToast({
+        type: 'error',
+        title: 'Autopilot Trigger Notice',
+        message: err.message || 'Could not poll server autopilot immediately.',
+      });
+    }
+  };
+
+  // Continually monitor server status every 15s and initial poll
+  useEffect(() => {
+    fetchServerAutopilotStatus();
+    const interval = setInterval(fetchServerAutopilotStatus, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   const [autoScanCountdown, setAutoScanCountdown] = useState(10);
   const handledMessageIdsRef = useRef<Set<string>>(new Set());
@@ -226,6 +324,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'DELIVERED',
     },
   ]);
+
+  // In-App Categorized Gmail Inbox State
+  const [categorizedGmailEmails, setCategorizedGmailEmails] = useState<CategorizedGmailEmail[]>([]);
+  const [isLoadingGmailEmails, setIsLoadingGmailEmails] = useState(false);
+
+  const loadCategorizedGmailEmails = async (silent: boolean = false) => {
+    if (!silent) setIsLoadingGmailEmails(true);
+    try {
+      const token = GmailService.getAccessToken() || getCachedAccessToken();
+      const repliedSet = new Set(autoReplyLogs.map(l => l.messageId));
+      const list = await GmailService.fetchCategorizedEmails(35, token || undefined, repliedSet);
+      setCategorizedGmailEmails(list);
+    } catch (e) {
+      console.warn('Load categorized emails notice:', e);
+    } finally {
+      if (!silent) setIsLoadingGmailEmails(false);
+    }
+  };
+
+  // Auto-updating Smart Inbox: initial fetch + continuous live background updates every 20s
+  useEffect(() => {
+    loadCategorizedGmailEmails(false);
+    const interval = setInterval(() => {
+      loadCategorizedGmailEmails(true);
+    }, 20000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Google Sheets Activity Report Config
   const [googleSheetsConfig, setGoogleSheetsConfig] = useState<GoogleSheetsConfig>({
@@ -275,6 +400,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
+  // Auto-sync configuration to server so background autopilot is always up to date
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      syncAutonomousBackend();
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [business.name, agent, knowledge.length, calendarConfig, googleSheetsConfig.isConnected, isAutoResponderActive, gmailAccount.email]);
+
   // Listen to Firebase Auth state on mount & restore user data
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -299,6 +432,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           GoogleSheetsService.setAccessToken(token);
           GoogleCalendarService.setAccessToken(token);
           setIsGoogleAuthenticated(!token.startsWith('demo_'));
+          syncAutonomousBackend(token);
         }
 
         setGmailAccount(prev => ({
@@ -406,6 +540,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       GoogleSheetsService.setAccessToken(token);
       GoogleCalendarService.setAccessToken(token);
       setIsGoogleAuthenticated(true);
+      syncAutonomousBackend(token);
     }
     setGmailAccount(prev => ({
       ...prev,
@@ -784,9 +919,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     addToast({
-      type: 'info',
-      title: 'Logged out securely',
-      message: 'Your business profile, knowledge, and settings are saved under your Google account.',
+      type: 'success',
+      title: '24/7 Autopilot Active on Server ✓',
+      message: 'You have logged out of this browser. Mailora AI 24/7 background autopilot continues running on the server to read & reply to customer emails around the clock.',
     });
   };
 
@@ -1062,14 +1197,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           clientName: senderName,
           businessName: business.name,
           durationMinutes: calendarConfig.defaultMeetingDurationMinutes || 30,
+          existingBookings: calendarBookings,
         });
 
-        if (meetingRes.action === 'BOOKED' && meetingRes.calendarBooking) {
+        if ((meetingRes.action === 'BOOKED' || meetingRes.action === 'RESCHEDULED') && meetingRes.calendarBooking) {
           meetingBookingInfo = meetingRes.meetingBookingInfo;
-          meetingReportSummary = meetingRes.meetingReportSummary || 'Booked';
+          meetingReportSummary = meetingRes.meetingReportSummary || (meetingRes.action === 'RESCHEDULED' ? 'Rescheduled' : 'Booked');
 
           setCalendarBookings(prev => {
-            const next = [meetingRes.calendarBooking!, ...prev];
+            let updated = prev;
+            if (meetingRes.action === 'RESCHEDULED') {
+              // Delete old booking automatically to prevent duplicate/double meetings
+              updated = prev.filter(b => {
+                const matchId = meetingRes.rescheduledOldBookingId && b.id === meetingRes.rescheduledOldBookingId;
+                const matchEventId = meetingRes.deletedOldEventId && b.eventId === meetingRes.deletedOldEventId;
+                const matchEmail = b.clientEmail.toLowerCase() === sender.toLowerCase();
+                return !(matchId || matchEventId || matchEmail);
+              });
+            }
+            const next = [meetingRes.calendarBooking!, ...updated];
             if (user?.uid) {
               saveUserLocalData(user.uid, { calendarBookings: next });
               FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, meetingRes.calendarBooking!);
@@ -1094,6 +1240,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    // 2. Document & PDF Attachment Retrieval
+    let attachmentInfo: any = undefined;
+    let attachmentPayload: any = undefined;
+    try {
+      const att = await GoogleDriveService.findRelevantAttachment(`${subject} ${body}`, undefined, business.name);
+      if (att) {
+        attachmentInfo = { filename: att.name, driveUrl: att.webViewLink };
+        attachmentPayload = { filename: att.name, mimeType: att.mimeType, base64Content: att.base64Content };
+      }
+    } catch (attErr) {
+      console.warn('Simulate attachment notice:', attErr);
+    }
+
     const classification = await classifyEmailIntent(subject, body, sender);
     const retrievedChunks = retrieveRelevantKnowledge(`${subject} ${body}`, knowledge, 4);
     const generated = await generateAgentEmailReply({
@@ -1106,6 +1265,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       intent: classification.intent,
       enableWebSearch: true,
       meetingBookingInfo,
+      attachmentInfo,
     });
 
     const newThread: EmailThread = {
@@ -1174,10 +1334,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }, token || undefined).catch(e => console.warn('Google Sheet log notice:', e));
     }
 
+    // Sync to In-App Smart Inbox so user always sees new incoming emails immediately
+    const isUrgentSim = classification.intent === 'Complaint' || subject.toLowerCase().includes('urgent') || body.toLowerCase().includes('urgent');
+    const isMeetingSim = Boolean(meetingBookingInfo) || subject.toLowerCase().includes('meeting') || body.toLowerCase().includes('appointment');
+    const simInboxItem: CategorizedGmailEmail = {
+      id: `sim_msg_${Date.now()}`,
+      threadId,
+      from: sender,
+      fromName: senderName,
+      subject,
+      snippet: body.slice(0, 120),
+      body,
+      date: 'Just now',
+      category: isUrgentSim ? 'URGENT' : isMeetingSim ? 'MEETING' : 'INQUIRY',
+      isUnread: true,
+      isFromSpam: false,
+      hasAiReplied: true,
+      urgency: isUrgentSim ? 'high' : 'normal',
+    };
+    setCategorizedGmailEmails(prev => [simInboxItem, ...prev]);
+
     addToast({
       type: 'success',
-      title: meetingBookingInfo?.status === 'BOOKED' ? 'Meeting Booked & Replied ✓' : 'Incoming Email Handled ✓',
-      message: meetingBookingInfo?.status === 'BOOKED'
+      title: meetingBookingInfo?.status === 'RESCHEDULED'
+        ? 'Meeting Rescheduled & Replied ✓'
+        : meetingBookingInfo?.status === 'BOOKED'
+        ? 'Meeting Booked & Replied ✓'
+        : 'Incoming Email Handled ✓',
+      message: meetingBookingInfo?.status === 'RESCHEDULED'
+        ? `Appointment rescheduled (previous cancelled) & replied to "${subject}"`
+        : meetingBookingInfo?.status === 'BOOKED'
         ? `Appointment booked on Google Calendar & replied to "${subject}"`
         : `Auto-replied to "${subject}" from ${senderName}`,
     });
@@ -1203,14 +1389,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           clientName: params.customerName || 'Valued Customer',
           businessName: business.name,
           durationMinutes: calendarConfig.defaultMeetingDurationMinutes || 30,
+          existingBookings: calendarBookings,
         });
 
-        if (meetingRes.action === 'BOOKED' && meetingRes.calendarBooking) {
+        if ((meetingRes.action === 'BOOKED' || meetingRes.action === 'RESCHEDULED') && meetingRes.calendarBooking) {
           meetingBookingInfo = meetingRes.meetingBookingInfo;
-          meetingReportSummary = meetingRes.meetingReportSummary || 'Booked';
+          meetingReportSummary = meetingRes.meetingReportSummary || (meetingRes.action === 'RESCHEDULED' ? 'Rescheduled' : 'Booked');
 
           setCalendarBookings(prev => {
-            const next = [meetingRes.calendarBooking!, ...prev];
+            let updated = prev;
+            if (meetingRes.action === 'RESCHEDULED') {
+              // Delete/remove old booking so double meeting doesn't happen
+              updated = prev.filter(b => {
+                const matchId = meetingRes.rescheduledOldBookingId && b.id === meetingRes.rescheduledOldBookingId;
+                const matchEventId = meetingRes.deletedOldEventId && b.eventId === meetingRes.deletedOldEventId;
+                const matchEmail = b.clientEmail.toLowerCase() === params.toEmail.toLowerCase();
+                return !(matchId || matchEventId || matchEmail);
+              });
+            }
+            const next = [meetingRes.calendarBooking!, ...updated];
             if (user?.uid) {
               saveUserLocalData(user.uid, { calendarBookings: next });
               FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, meetingRes.calendarBooking!);
@@ -1235,6 +1432,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    // 2. Document & PDF Attachment Retrieval
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
+    let attachmentInfo: any = undefined;
+    let attachmentPayload: any = undefined;
+    try {
+      const att = await GoogleDriveService.findRelevantAttachment(`${params.subject} ${params.body}`, token || undefined, business.name);
+      if (att) {
+        attachmentInfo = { filename: att.name, driveUrl: att.webViewLink };
+        attachmentPayload = { filename: att.name, mimeType: att.mimeType, base64Content: att.base64Content };
+      }
+    } catch (attErr) {
+      console.warn('Live test attachment notice:', attErr);
+    }
+
     const classification = await classifyEmailIntent(params.subject, params.body, params.toEmail);
     const retrievedChunks = retrieveRelevantKnowledge(`${params.subject} ${params.body}`, knowledge, 4);
 
@@ -1248,15 +1459,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       intent: classification.intent,
       enableWebSearch: true,
       meetingBookingInfo,
+      attachmentInfo,
     });
 
-    const token = GmailService.getAccessToken() || getCachedAccessToken();
     await GmailService.sendEmail({
       to: params.toEmail,
       subject: params.subject.startsWith('Re: ') ? params.subject : `Re: ${params.subject}`,
       body: generated.reply,
       senderName: agent.name,
       businessName: business.name,
+      attachments: attachmentPayload ? [attachmentPayload] : undefined,
     }, token || undefined);
 
     // Auto-log to Google Sheets if connected
@@ -1429,14 +1641,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               businessName: business.name,
               durationMinutes: calendarConfig.defaultMeetingDurationMinutes || 30,
               accessToken: token,
+              existingBookings: calendarBookings,
             });
 
-            if (meetingRes.action === 'BOOKED' && meetingRes.calendarBooking) {
+            if ((meetingRes.action === 'BOOKED' || meetingRes.action === 'RESCHEDULED') && meetingRes.calendarBooking) {
               meetingBookingInfo = meetingRes.meetingBookingInfo;
-              meetingReportSummary = meetingRes.meetingReportSummary || 'Booked';
+              meetingReportSummary = meetingRes.meetingReportSummary || (meetingRes.action === 'RESCHEDULED' ? 'Rescheduled' : 'Booked');
 
               setCalendarBookings(prev => {
-                const next = [meetingRes.calendarBooking!, ...prev];
+                let updated = prev;
+                if (meetingRes.action === 'RESCHEDULED') {
+                  // Delete/remove old booking so double meeting doesn't happen
+                  updated = prev.filter(b => {
+                    const matchId = meetingRes.rescheduledOldBookingId && b.id === meetingRes.rescheduledOldBookingId;
+                    const matchEventId = meetingRes.deletedOldEventId && b.eventId === meetingRes.deletedOldEventId;
+                    const matchEmail = b.clientEmail.toLowerCase() === item.from.toLowerCase();
+                    return !(matchId || matchEventId || matchEmail);
+                  });
+                }
+                const next = [meetingRes.calendarBooking!, ...updated];
                 if (user?.uid) {
                   saveUserLocalData(user.uid, { calendarBookings: next });
                   FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, meetingRes.calendarBooking!);
@@ -1468,6 +1691,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           4
         );
 
+        // 3.5 Document & PDF Attachment Retrieval
+        let attachmentInfo: any = undefined;
+        let attachmentPayload: any = undefined;
+        try {
+          const att = await GoogleDriveService.findRelevantAttachment(`${item.subject} ${item.body}`, token, business.name);
+          if (att) {
+            attachmentInfo = { filename: att.name, driveUrl: att.webViewLink };
+            attachmentPayload = { filename: att.name, mimeType: att.mimeType, base64Content: att.base64Content };
+          }
+        } catch (attErr) {
+          console.warn('Poll attachment notice:', attErr);
+        }
+
         // 4. Response Generation with Gemini 3.8 Flash (Situation-Aware & Web-Grounded)
         const generated = await generateAgentEmailReply({
           subject: item.subject,
@@ -1479,6 +1715,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           intent: classification.intent,
           enableWebSearch: true,
           meetingBookingInfo,
+          attachmentInfo,
         });
 
         // 5. Send Email via Gmail API (Immediate Autopilot Reply - Dual Plain/HTML Spam-Safe)
@@ -1491,6 +1728,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             inReplyTo: item.id,
             senderName: agent.name,
             businessName: business.name,
+            attachments: attachmentPayload ? [attachmentPayload] : undefined,
           }, token);
 
           // 5. Mark as read in Gmail so we never process again
@@ -1630,6 +1868,225 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err: any) {
       console.warn('Auto responder background cycle notice:', err);
       return { processed: 0 };
+    }
+  };
+
+  // Toggle Email Read / Unread status directly in-app and in Gmail API
+  const toggleEmailReadStatus = async (messageId: string, currentUnread: boolean) => {
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
+    const newUnread = !currentUnread;
+
+    // Optimistically update in-app state
+    setCategorizedGmailEmails(prev =>
+      prev.map(e => (e.id === messageId ? { ...e, isUnread: newUnread } : e))
+    );
+
+    try {
+      if (newUnread) {
+        await GmailService.markAsUnread(messageId, token || undefined);
+        addToast({
+          type: 'info',
+          title: 'Marked as Unread',
+          message: 'Email marked as unread in your Gmail inbox.',
+        });
+      } else {
+        await GmailService.markAsRead(messageId, token || undefined);
+        addToast({
+          type: 'info',
+          title: 'Marked as Read',
+          message: 'Email marked as read (Duplicate protection active).',
+        });
+      }
+    } catch (err) {
+      console.warn('toggleEmailReadStatus notice:', err);
+    }
+  };
+
+  // Process a single client email on-demand with AI directly from the In-App Inbox
+  const processSingleEmailWithAi = async (email: CategorizedGmailEmail): Promise<{ success: boolean; reply?: string }> => {
+    const token = GmailService.getAccessToken() || getCachedAccessToken();
+
+    addToast({
+      type: 'info',
+      title: '🤖 AI Analyzing Task...',
+      message: `Analyzing "${email.subject}" from ${email.fromName}...`,
+    });
+
+    try {
+      // 1. Google Calendar Meeting Detection & Auto-Appointment Booking / Rescheduling
+      let meetingBookingInfo: any = undefined;
+      let meetingReportSummary = 'N/A';
+
+      if (calendarConfig.autoBookMeetings) {
+        try {
+          const meetingRes = await GoogleCalendarService.processMeetingInquiry({
+            subject: email.subject,
+            body: email.body,
+            clientEmail: email.from,
+            clientName: email.fromName,
+            businessName: business.name,
+            durationMinutes: calendarConfig.defaultMeetingDurationMinutes || 30,
+            accessToken: token || undefined,
+            existingBookings: calendarBookings,
+          });
+
+          if ((meetingRes.action === 'BOOKED' || meetingRes.action === 'RESCHEDULED') && meetingRes.calendarBooking) {
+            meetingBookingInfo = meetingRes.meetingBookingInfo;
+            meetingReportSummary = meetingRes.meetingReportSummary || (meetingRes.action === 'RESCHEDULED' ? 'Rescheduled' : 'Booked');
+
+            setCalendarBookings(prev => {
+              let updated = prev;
+              if (meetingRes.action === 'RESCHEDULED') {
+                // Delete/remove old booking so double meeting doesn't happen
+                updated = prev.filter(b => {
+                  const matchId = meetingRes.rescheduledOldBookingId && b.id === meetingRes.rescheduledOldBookingId;
+                  const matchEventId = meetingRes.deletedOldEventId && b.eventId === meetingRes.deletedOldEventId;
+                  const matchEmail = b.clientEmail.toLowerCase() === email.from.toLowerCase();
+                  return !(matchId || matchEventId || matchEmail);
+                });
+              }
+              const next = [meetingRes.calendarBooking!, ...updated];
+              if (user?.uid) {
+                saveUserLocalData(user.uid, { calendarBookings: next });
+                FirestoreSyncService.saveCalendarBooking(`biz_${user.uid}`, meetingRes.calendarBooking!);
+              }
+              return next;
+            });
+
+            setCalendarConfig(prev => {
+              const next = { ...prev, totalMeetingsBooked: (prev.totalMeetingsBooked || 0) + 1 };
+              if (user?.uid) {
+                saveUserLocalData(user.uid, { calendarConfig: next });
+                FirestoreSyncService.saveCalendarConfig(`biz_${user.uid}`, next);
+              }
+              return next;
+            });
+          } else if (meetingRes.action === 'SUGGEST_SLOTS') {
+            meetingBookingInfo = meetingRes.meetingBookingInfo;
+            meetingReportSummary = meetingRes.meetingReportSummary || 'Slots Suggested';
+          }
+        } catch (calErr) {
+          console.warn('Calendar meeting processing error:', calErr);
+        }
+      }
+
+      // 2. Knowledge Retrieval (RAG)
+      const retrievedChunks = retrieveRelevantKnowledge(`${email.subject} ${email.body}`, knowledge, 4);
+
+      // 3. Document / PDF attachment retrieval from Google Drive
+      let attachmentInfo: any = undefined;
+      let attachmentPayload: any = undefined;
+      try {
+        const att = await GoogleDriveService.findRelevantAttachment(`${email.subject} ${email.body}`, token || undefined, business.name);
+        if (att) {
+          attachmentInfo = { filename: att.name, driveUrl: att.webViewLink };
+          attachmentPayload = { filename: att.name, mimeType: att.mimeType, base64Content: att.base64Content };
+        }
+      } catch (attErr) {
+        console.warn('Attachment retrieval error:', attErr);
+      }
+
+      // 4. Generate AI reply
+      const classification = await classifyEmailIntent(email.subject, email.body, email.from);
+      const generated = await generateAgentEmailReply({
+        subject: email.subject,
+        body: email.body,
+        customerName: email.fromName,
+        businessName: business.name,
+        agentConfig: agent,
+        retrievedChunks,
+        intent: classification.intent,
+        enableWebSearch: true,
+        meetingBookingInfo,
+        attachmentInfo,
+      });
+
+      // 5. Send via Gmail API if authentic token exists
+      let sentMessageId = `msg_reply_${Date.now()}`;
+      if (token && !token.startsWith('demo_')) {
+        const sendRes = await GmailService.sendEmail({
+          to: email.from,
+          subject: email.subject.startsWith('Re: ') ? email.subject : `Re: ${email.subject}`,
+          body: generated.reply,
+          threadId: email.threadId,
+          inReplyTo: email.id,
+          senderName: agent.name,
+          businessName: business.name,
+          attachments: attachmentPayload ? [attachmentPayload] : undefined,
+        }, token);
+        sentMessageId = sendRes.messageId || sentMessageId;
+        // Mark as read in Gmail for duplicate prevention
+        await GmailService.markAsRead(email.id, token);
+      }
+
+      // Prevent duplicate processing
+      handledMessageIdsRef.current.add(email.id);
+
+      // Update in-app categorized email state
+      setCategorizedGmailEmails(prev =>
+        prev.map(e => (e.id === email.id ? { ...e, hasAiReplied: true, isUnread: false } : e))
+      );
+
+      // Record to autoReplyLogs
+      const newLog: AutoReplyLog = {
+        id: `log_${Date.now()}`,
+        messageId: sentMessageId,
+        fromEmail: email.from,
+        fromName: email.fromName,
+        subject: email.subject,
+        incomingSnippet: email.snippet || email.body.slice(0, 100),
+        replySnippet: generated.reply.slice(0, 140) + '...',
+        fullReply: generated.reply,
+        intent: classification.intent,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        status: 'DELIVERED',
+      };
+
+      setAutoReplyLogs(prev => {
+        const next = [newLog, ...prev.slice(0, 49)];
+        if (user?.uid) {
+          saveUserLocalData(user.uid, { autoReplyLogs: next });
+          FirestoreSyncService.saveAutoReplyLogs(`biz_${user.uid}`, next);
+        }
+        return next;
+      });
+
+      // Append to Google Sheet if connected
+      if (googleSheetsConfig.isConnected && googleSheetsConfig.spreadsheetId) {
+        GoogleSheetsService.logEmailReply(googleSheetsConfig.spreadsheetId, {
+          timestamp: new Date().toISOString(),
+          date: new Date().toLocaleDateString(),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          clientName: email.fromName,
+          clientEmail: email.from,
+          subject: email.subject,
+          inquirySummary: email.body.slice(0, 200),
+          replySummary: generated.reply.slice(0, 300),
+          intent: classification.intent,
+          meetingBooked: meetingReportSummary,
+          status: 'DELIVERED',
+        }, token || undefined).catch(e => console.warn('Google Sheet log error:', e));
+      }
+
+      addToast({
+        type: 'success',
+        title: meetingBookingInfo?.status === 'RESCHEDULED'
+          ? '🔄 Rescheduled & Confirmed!'
+          : meetingBookingInfo?.status === 'BOOKED'
+          ? '📅 Meeting Booked & Confirmed!'
+          : '⚡ AI Response Dispatched!',
+        message: `Replied to ${email.fromName} with complete requirement service.`,
+      });
+
+      return { success: true, reply: generated.reply };
+    } catch (err: any) {
+      console.error('processSingleEmailWithAi error:', err);
+      addToast({
+        type: 'error',
+        title: 'AI Processing Error',
+        message: err.message || 'Could not process email with AI.',
+      });
+      return { success: false };
     }
   };
 
@@ -2033,6 +2490,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pollAndAutoReplyGmail,
         isGoogleAuthenticated,
         connectGoogleAccount,
+        categorizedGmailEmails,
+        isLoadingGmailEmails,
+        loadCategorizedGmailEmails,
+        toggleEmailReadStatus,
+        processSingleEmailWithAi,
         googleSheetsConfig,
         connectGoogleSheet,
         disconnectGoogleSheet,
@@ -2078,6 +2540,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         importWebsiteData,
         uploadKnowledgeFile,
         applyBusinessTemplate,
+        serverAutopilotStatus,
+        fetchServerAutopilotStatus,
+        triggerServerAutopilotNow,
+        syncAutonomousBackend,
         saveAllSetupData,
         addToast,
         removeToast,
